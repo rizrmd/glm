@@ -759,7 +759,11 @@ except Exception as e:
         
         # Set up environment for subprocess
         env = os.environ.copy()
-        env['PYTHONPATH'] = os.path.dirname(os.path.abspath(__file__))
+        
+        # Add current directory and user site-packages to PYTHONPATH
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        user_site = os.path.expanduser('~/.local/lib/python*/site-packages')
+        env['PYTHONPATH'] = f"{current_dir}:{user_site}:{env.get('PYTHONPATH', '')}"
         
         if parallel:
             # Run in background thread
