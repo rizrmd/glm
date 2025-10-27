@@ -433,116 +433,10 @@ class GLMRunner:
         return False
     
     def download_precompiled_binaries(self) -> bool:
-        """Download precompiled llama.cpp binaries if available"""
-        system = self.hardware.system_info['platform']
-        arch = self.hardware.system_info['architecture']
-        
-        # For NVIDIA GPUs, always build from source to get CUDA support
-        if self.hardware.gpu_info['nvidia_available']:
-            self.print_status("NVIDIA GPU detected - building from source for CUDA support")
-            return False
-        
-        # Get latest release version for dynamic naming
-        try:
-            import requests
-            response = requests.get('https://api.github.com/repos/ggerganov/llama.cpp/releases/latest')
-            response.raise_for_status()
-            release_data = response.json()
-            version = release_data['tag_name']
-        except:
-            version = 'b6853'  # Fallback version
-        
-        # Default mapping for Linux only
-        asset_map = {
-            'Linux': {
-                'x86_64': f'llama-{version}-bin-ubuntu-x64.zip',
-                'aarch64': f'llama-{version}-bin-ubuntu-aarch64.zip'
-            }
-        }
-        
-        # Only support Linux
-        if system != 'Linux':
-            self.print_error(f"Unsupported platform: {system}. Only Linux is supported.")
-            return False
-        
-        # Use CPU binary for non-NVIDIA systems
-        asset_name = asset_map[system][arch]
-        self.print_status(f"Downloading precompiled llama.cpp binaries for {system} {arch}...")
-        
-        try:
-            # Download latest release
-            import requests
-            response = requests.get('https://api.github.com/repos/ggerganov/llama.cpp/releases/latest')
-            response.raise_for_status()
-            release_data = response.json()
-            
-            # Find the correct asset
-            asset_url = None
-            for asset in release_data['assets']:
-                if asset['name'] == asset_name:
-                    asset_url = asset['browser_download_url']
-                    break
-            
-            if not asset_url:
-                self.print_warning(f"Could not find precompiled binary: {asset_name}")
-                return False
-            
-            # Get asset name from URL
-            asset_name_from_url = asset_url.split('/')[-1]
-            
-            # Download and extract
-            import tempfile
-            import zipfile
-            import tarfile
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
-                self.print_status(f"Downloading {asset_name_from_url}...")
-                response = requests.get(asset_url, stream=True)
-                response.raise_for_status()
-                
-                for chunk in response.iter_content(chunk_size=8192):
-                    tmp_file.write(chunk)
-                
-                tmp_file.close()
-                
-                # Extract based on file type
-                if asset_url.endswith('.zip'):
-                    with zipfile.ZipFile(tmp_file.name, 'r') as zip_ref:
-                        # Debug: show what's in the zip
-                        self.print_status(f"Zip contents: {zip_ref.namelist()[:10]}...")  # Show first 10 files
-                        zip_ref.extractall('.')
-                        # Move binaries and libraries to expected location
-                        self._move_binaries_to_llama_dir()
-                        
-                        # Debug: show what files exist after moving
-                        self.print_status("Files after extraction:")
-                        for item in os.listdir('.'):
-                            if os.path.isfile(item):
-                                self.print_status(f"  {item}")
-                        if os.path.exists(self.config['llama_cpp_dir']):
-                            for item in os.listdir(self.config['llama_cpp_dir']):
-                                if os.path.isfile(os.path.join(self.config['llama_cpp_dir'], item)):
-                                    self.print_status(f"  llama.cpp/{item}")
-                elif asset_url.endswith('.tar.gz') or asset_url.endswith('.tgz'):
-                    with tarfile.open(tmp_file.name, 'r:gz') as tar_ref:
-                        tar_ref.extractall('.')
-                        # Move binaries and libraries to expected location
-                        self._move_binaries_to_llama_dir()
-
-                elif asset_url.endswith('.tar.gz') or asset_url.endswith('.tgz'):
-                    with tarfile.open(tmp_file.name, 'r:gz') as tar_ref:
-                        tar_ref.extractall('.')
-                        # Move binaries and libraries to expected location
-                        self._move_binaries_to_llama_dir()
-                
-                os.unlink(tmp_file.name)
-            
-            self.print_success("Precompiled binaries downloaded successfully")
-            return True
-            
-        except Exception as e:
-            self.print_warning(f"Failed to download precompiled binaries: {e}")
-            return False
+        """Precompiled binary downloading is disabled - always build from source"""
+        self.print_status("Precompiled binary downloading is disabled")
+        self.print_status("Always building from source for optimal GPU support")
+        return False
     
     def _move_binaries_to_llama_dir(self):
         """Move downloaded binaries to llama.cpp directory and set permissions"""
@@ -665,19 +559,17 @@ class GLMRunner:
     
 
     
-    def _redownload_with_libraries(self):
-        """Force re-download to get missing shared libraries"""
-        # Remove existing binaries to force re-download
-        llama_cpp_dir = self.config['llama_cpp_dir']
-        if os.path.exists(llama_cpp_dir):
-            for item in os.listdir(llama_cpp_dir):
-                if item.startswith('llama-') or item.startswith('lib'):
-                    os.remove(os.path.join(llama_cpp_dir, item))
+    def _rebuild_from_source(self):
+        """Force rebuild from source to get missing shared libraries"""
+        # Remove existing binaries to force rebuild
+        llama_cpp_dir = Path(self.config['llama_cpp_dir'])
+        if llama_cpp_dir.exists():
+            for item in llama_cpp_dir.iterdir():
+                if item.name.startswith('llama-') or item.name.startswith('lib'):
+                    item.unlink()
         
-        # Download again
-        if not self.download_precompiled_binaries():
-            self.print_error("Failed to re-download binaries with libraries")
-            sys.exit(1)
+        # Rebuild from source
+        self._build_from_source_linux()
     
     def build_llama_cpp(self):
         """Build llama.cpp from source on Linux only"""
@@ -694,8 +586,8 @@ class GLMRunner:
             self._fix_binary_permissions()
             # Ensure shared libraries are available
             if not self._check_shared_libraries():
-                self.print_warning("Shared libraries missing, re-downloading...")
-                self._redownload_with_libraries()
+                self.print_warning("Shared libraries missing, rebuilding from source...")
+                self._rebuild_from_source()
             return
         
         # Build from source on Linux
@@ -803,30 +695,28 @@ class GLMRunner:
             
         except subprocess.CalledProcessError as e:
             self.print_error(f"Failed to build llama.cpp on Linux: {e}")
-            self.print_status("Falling back to precompiled binaries...")
-            self._download_precompiled_binaries_fallback()
+            self.print_error("Build failed - cannot proceed without compiled binaries")
+            sys.exit(1)
         
         finally:
             # Return to original directory
             os.chdir('..') if os.getcwd().endswith('llama.cpp') else None
     
     def _download_precompiled_binaries_fallback(self):
-        """Download precompiled binaries for non-Linux platforms or fallback"""
+        """Fallback method - always build from source"""
         if self.check_llama_cpp_binaries():
             self.print_success("llama.cpp binaries already available")
             # Fix permissions for existing binaries
             self._fix_binary_permissions()
             # Ensure shared libraries are available
             if not self._check_shared_libraries():
-                self.print_warning("Shared libraries missing, re-downloading...")
-                self._redownload_with_libraries()
+                self.print_warning("Shared libraries missing, rebuilding from source...")
+                self._rebuild_from_source()
             return
         
-        # GPU support is required
-        if not self.hardware.gpu_info['nvidia_available'] and not self.hardware.gpu_info['amd_available']:
-            self.print_error("No supported GPU detected. This script requires NVIDIA or AMD GPU support.")
-            self.print_status("CPU-only builds are not supported.")
-            sys.exit(1)
+        # Always build from source for optimal GPU support
+        self.print_status("Building llama.cpp from source for optimal GPU support")
+        self._build_from_source_linux()
         
         # For NVIDIA GPUs, always build from source for CUDA support
         if self.hardware.gpu_info['nvidia_available']:
