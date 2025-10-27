@@ -1327,7 +1327,8 @@ except Exception as e:
                     # Use full precision KV cache to maximize VRAM usage and performance
                     cmd.extend(['--cache-type-k', 'f16'])  # Full precision K cache for best speed
                     cmd.extend(['--cache-type-v', 'f16'])  # Full precision V cache for best speed
-                    # Advanced CUDA optimizations for H200
+                    # Eliminate CPU mapping - keep everything on GPU
+                    cmd.extend(['--no-mmap'])  # Disable memory mapping to prevent CPU usage
                     cmd.extend(['--mlock'])  # Lock memory to prevent swapping
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
