@@ -906,7 +906,7 @@ except Exception as e:
                 cmd.extend(['--cache-type-k', 'q4_1', '--cache-type-v', 'q4_1'])
             
             if self.optimal_settings['use_flash_attention']:
-                cmd.append('--flash-attn')
+                cmd.extend(['--flash-attn', 'on'])
         
         elif self.hardware.gpu_info['apple_silicon']:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
