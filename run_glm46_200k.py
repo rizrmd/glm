@@ -510,7 +510,24 @@ class GLMRunner:
                 # Extract based on file type
                 if asset_url.endswith('.zip'):
                     with zipfile.ZipFile(tmp_file.name, 'r') as zip_ref:
+                        # Debug: show what's in the zip
+                        self.print_status(f"Zip contents: {zip_ref.namelist()[:10]}...")  # Show first 10 files
                         zip_ref.extractall('.')
+                        # Move binaries and libraries to expected location
+                        self._move_binaries_to_llama_dir()
+                        
+                        # Debug: show what files exist after moving
+                        self.print_status("Files after extraction:")
+                        for item in os.listdir('.'):
+                            if os.path.isfile(item):
+                                self.print_status(f"  {item}")
+                        if os.path.exists(self.config['llama_cpp_dir']):
+                            for item in os.listdir(self.config['llama_cpp_dir']):
+                                if os.path.isfile(os.path.join(self.config['llama_cpp_dir'], item)):
+                                    self.print_status(f"  llama.cpp/{item}")
+                elif asset_url.endswith('.tar.gz') or asset_url.endswith('.tgz'):
+                    with tarfile.open(tmp_file.name, 'r:gz') as tar_ref:
+                        tar_ref.extractall('.')
                         # Move binaries and libraries to expected location
                         self._move_binaries_to_llama_dir()
 
@@ -603,15 +620,27 @@ class GLMRunner:
                 self.print_status(f"Moved {lib} to {self.config['llama_cpp_dir']}/")
                 lib_found = True
             
-            # Check common subdirectories
+            # Check common subdirectories (expanded search)
             if not lib_found:
-                for subdir in ['lib', 'build/lib', 'build/src', '.']:
+                search_dirs = ['lib', 'build/lib', 'build/src', 'build', 'bin', '.']
+                for subdir in search_dirs:
                     lib_path = os.path.join(subdir, lib)
                     if os.path.exists(lib_path):
                         src = lib_path
                         dst = os.path.join(self.config['llama_cpp_dir'], lib)
                         shutil.move(src, dst)
                         self.print_status(f"Moved {src} to {self.config['llama_cpp_dir']}/")
+                        lib_found = True
+                        break
+            
+            # If still not found, do a broader search
+            if not lib_found:
+                for root, dirs, files in os.walk('.'):
+                    if lib in files:
+                        src = os.path.join(root, lib)
+                        dst = os.path.join(self.config['llama_cpp_dir'], lib)
+                        shutil.move(src, dst)
+                        self.print_status(f"Found and moved {src} to {self.config['llama_cpp_dir']}/")
                         lib_found = True
                         break
     
