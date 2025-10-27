@@ -412,6 +412,12 @@ class GLMRunner:
             if binary_path.exists():
                 return True
         
+        # Check for binaries in llama.cpp/build/bin directory (CUDA build location)
+        for binary in required_binaries:
+            binary_path = Path(self.config['llama_cpp_dir']) / 'build' / 'bin' / binary
+            if binary_path.exists():
+                return True
+        
         # Check for precompiled binaries in current directory (fallback)
         for binary in required_binaries:
             if Path(binary).exists():
@@ -428,6 +434,11 @@ class GLMRunner:
         """Download precompiled llama.cpp binaries if available"""
         system = self.hardware.system_info['platform']
         arch = self.hardware.system_info['architecture']
+        
+        # For NVIDIA GPUs, always build from source to get CUDA support
+        if self.hardware.gpu_info['nvidia_available']:
+            self.print_status("NVIDIA GPU detected - building from source for CUDA support")
+            return False
         
         # Get latest release version for dynamic naming
         try:
@@ -452,22 +463,8 @@ class GLMRunner:
             self.print_error(f"Unsupported platform: {system}. Only Linux is supported.")
             return False
         
-        # Choose appropriate binary based on GPU availability
-        if arch == 'x86_64':
-            if self.hardware.gpu_info['nvidia_available']:
-                # Use Vulkan binary for NVIDIA GPU on Linux (no CUDA binary available)
-                asset_name = f'llama-{version}-bin-ubuntu-vulkan-x64.zip'
-                self.print_status("Using Vulkan binary for NVIDIA GPU support on Linux")
-            else:
-                # Use CPU binary for no GPU
-                asset_name = asset_map[system][arch]
-        else:
-            # Use default mapping for other architectures
-            if arch not in asset_map[system]:
-                self.print_warning(f"No precompiled binaries available for {system} {arch}")
-                return False
-            
-            asset_name = asset_map[system][arch]
+        # Use CPU binary for non-NVIDIA systems
+        asset_name = asset_map[system][arch]
         self.print_status(f"Downloading precompiled llama.cpp binaries for {system} {arch}...")
         
         try:
@@ -703,7 +700,7 @@ class GLMRunner:
         self._build_from_source_linux()
     
     def _build_from_source_linux(self):
-        """Build llama.cpp from source on Linux"""
+        """Build llama.cpp from source on Linux with CUDA support"""
         # Force rebuild by removing existing binaries
         llama_cpp_dir = Path(self.config['llama_cpp_dir'])
         if llama_cpp_dir.exists():
@@ -730,18 +727,20 @@ class GLMRunner:
             os.chdir('llama.cpp')
             
             # Optimized cmake configuration for faster builds
-            cmake_args = ['cmake', '-B', 'build', '-DCMAKE_BUILD_TYPE=Release', '-DLLAMA_NATIVE=ON']
+            cmake_args = ['cmake', '-B', 'build', '-DCMAKE_BUILD_TYPE=Release', '-DGGML_NATIVE=ON']
             
             # Linux build with appropriate GPU support
             if self.hardware.gpu_info['nvidia_available']:
                 self.print_status("Building optimized CUDA version for NVIDIA GPUs...")
-                cmake_args.extend(['-DLLAMA_CUDA=ON', '-DCMAKE_CUDA_ARCHITECTURES=native'])
+                cmake_args.extend(['-DGGML_CUDA=ON', '-DCMAKE_CUDA_ARCHITECTURES=native'])
+                # Additional CUDA optimizations
+                cmake_args.extend(['-DGGML_CUDA_F16=ON', '-DGGML_CUDA_DMMV=ON', '-DGGML_CUDA_MMQ=ON'])
             elif self.hardware.gpu_info['amd_available']:
                 self.print_status("Building optimized ROCm version for AMD GPUs...")
-                cmake_args.extend(['-DLLAMA_HIPBLAS=ON'])
+                cmake_args.extend(['-DGGML_HIPBLAS=ON'])
             else:
                 self.print_status("Building optimized CPU-only version for Linux...")
-                cmake_args.extend(['-DLLAMA_BLAS=ON', '-DLLAMA_BLAS_VENDOR=OpenBLAS'])
+                cmake_args.extend(['-DGGML_BLAS=ON', '-DGGML_BLAS_VENDOR=OpenBLAS'])
             
             # Add parallel compilation flags
             cmake_args.extend(['-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG', '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG'])
@@ -785,6 +784,18 @@ class GLMRunner:
                     shutil.copy2(lib_file, dst_path)
                     self.print_status(f"Copied library {lib_file.name}")
             
+            # Copy CUDA libraries if they exist
+            cuda_lib_build_dir = Path('llama.cpp/build/bin')
+            if cuda_lib_build_dir.exists():
+                for lib_file in cuda_lib_build_dir.glob('libggml-cuda.so*'):
+                    dst_path = Path(self.config['llama_cpp_dir']) / lib_file.name
+                    shutil.copy2(lib_file, dst_path)
+                    self.print_status(f"Copied CUDA library {lib_file.name}")
+                for lib_file in cuda_lib_build_dir.glob('libmtmd.so*'):
+                    dst_path = Path(self.config['llama_cpp_dir']) / lib_file.name
+                    shutil.copy2(lib_file, dst_path)
+                    self.print_status(f"Copied MTMD library {lib_file.name}")
+            
             self.print_success("llama.cpp built successfully from source on Linux")
             
         except subprocess.CalledProcessError as e:
@@ -807,8 +818,14 @@ class GLMRunner:
                 self.print_warning("Shared libraries missing, re-downloading...")
                 self._redownload_with_libraries()
             return
+        
+        # For NVIDIA GPUs, always build from source - never download precompiled
+        if self.hardware.gpu_info['nvidia_available']:
+            self.print_error("NVIDIA GPU detected but no CUDA binaries found - building from source")
+            self._build_from_source_linux()
+            return
             
-        # Download precompiled binaries
+        # Download precompiled binaries for non-NVIDIA systems
         if not self.download_precompiled_binaries():
             self.print_error("Failed to download precompiled binaries")
             sys.exit(1)
@@ -1295,6 +1312,11 @@ except Exception as e:
         if llama_cpp_path.exists():
             return str(llama_cpp_path)
         
+        # Check llama.cpp/build/bin directory (CUDA build location)
+        build_path = Path(self.config['llama_cpp_dir']) / 'build' / 'bin' / binary_name
+        if build_path.exists():
+            return str(build_path)
+        
         # Check current directory
         current_path = Path(binary_name)
         if current_path.exists():
@@ -1370,13 +1392,16 @@ except Exception as e:
         if self.hardware.gpu_info['nvidia_available'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
             
-            # Check if we're using Vulkan (Linux) or CUDA (other platforms)
-            if self.hardware.system_info['platform'] == 'Linux':
-                # Vulkan binary - use conservative settings
-                self.print_status("Using Vulkan GPU backend (Linux)")
-                # Avoid advanced features that may not be supported in Vulkan
+            # Always use CUDA for NVIDIA GPUs on Linux
+            if self.hardware.gpu_info['nvidia_available']:
+                self.print_status("Using CUDA GPU backend for NVIDIA GPUs")
+                is_cuda = True
             else:
-                # CUDA binary (Windows/macOS) - can use advanced features
+                self.print_status("Using CPU backend (no NVIDIA GPU detected)")
+                is_cuda = False
+            
+            if is_cuda:
+                # CUDA binary - can use advanced features
                 # Only add tensor override if we have valid buffer types
                 if 'f32' in buffer_types:
                     cmd.extend(['-ot', '.ffn_.*_exps.=f32'])
@@ -1416,7 +1441,14 @@ except Exception as e:
         
         # Memory optimizations for large context
         if self.config['context_size'] >= 100000:
-            cmd.extend(['--memory-f16'])  # Use half precision for KV cache if available
+            # Note: --memory-f16 flag may not be available in all builds
+            # Only add if binary supports it
+            try:
+                result = subprocess.run([cmd[0], '--help'], capture_output=True, text=True, timeout=5)
+                if '--memory-f16' in result.stdout + result.stderr:
+                    cmd.extend(['--memory-f16'])  # Use half precision for KV cache if available
+            except:
+                pass
         
         # Performance optimization info
         if buffer_types:
