@@ -997,8 +997,9 @@ try:
     direct_file_found = False
     for f in gguf_files:
         filename = f.split('/')[-1]
-        if quant_type in filename and filename.startswith(f"GLM-4.6-{{quant_type}}"):
-            target_files.append(f)
+        # Look for files that start with "GLM-4.6-" and contain the quantization
+        if filename.startswith("GLM-4.6-") and quant_type in filename:
+            target_files.append(filename)  # Store just the filename, not full path
             direct_file_found = True
             print(f"Found direct file: {{filename}}")
     
@@ -1033,13 +1034,15 @@ try:
         filename = file_path.split('/')[-1]
         
         # Check if this is a direct file (no subdirectory)
-        if file_path.count('/') == 0 or not any(dir in file_path for dir in ["UD-", "Q", "IQ"]):
+        # Direct files will have format like "GLM-4.6-UD-TQ1_0.gguf"
+        # Files in subdirectories will have quantization folder names
+        if filename.startswith("GLM-4.6-"):
             # Direct file at repository root
             download_filename = filename
             print(f"Downloading direct file: {{filename}}")
         else:
             # File in subdirectory
-            # Extract subdirectory path (everything before the filename)
+            # Extract subdirectory path (everything before filename)
             path_parts = file_path.split('/')
             if len(path_parts) >= 2:
                 subdirectory = '/'.join(path_parts[:-1])  # Everything except filename
