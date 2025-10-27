@@ -511,12 +511,13 @@ class GLMRunner:
                 if asset_url.endswith('.zip'):
                     with zipfile.ZipFile(tmp_file.name, 'r') as zip_ref:
                         zip_ref.extractall('.')
-                        # Move binaries to expected location if they're in a subdirectory
+                        # Move binaries and libraries to expected location
                         self._move_binaries_to_llama_dir()
+
                 elif asset_url.endswith('.tar.gz') or asset_url.endswith('.tgz'):
                     with tarfile.open(tmp_file.name, 'r:gz') as tar_ref:
                         tar_ref.extractall('.')
-                        # Move binaries to expected location if they're in a subdirectory
+                        # Move binaries and libraries to expected location
                         self._move_binaries_to_llama_dir()
                 
                 os.unlink(tmp_file.name)
@@ -635,95 +636,43 @@ class GLMRunner:
                 return False
         return True
     
-    def _build_from_source(self):
-        """Build llama.cpp from source (extracted from original build_llama_cpp method)"""
-        self.print_status("Building llama.cpp from source...")
+
+    
+    def _redownload_with_libraries(self):
+        """Force re-download to get missing shared libraries"""
+        # Remove existing binaries to force re-download
+        llama_cpp_dir = self.config['llama_cpp_dir']
+        if os.path.exists(llama_cpp_dir):
+            for item in os.listdir(llama_cpp_dir):
+                if item.startswith('llama-') or item.startswith('lib'):
+                    os.remove(os.path.join(llama_cpp_dir, item))
         
-        if not os.path.exists(self.config['llama_cpp_dir']):
-            self.print_status("Cloning llama.cpp repository...")
-            subprocess.run(['git', 'clone', 'https://github.com/ggerganov/llama.cpp'], check=True)
-        else:
-            self.print_status("llama.cpp repository already exists, updating...")
-            os.chdir(self.config['llama_cpp_dir'])
-            subprocess.run(['git', 'pull'], check=True)
-            os.chdir('..')
-        
-        os.chdir(self.config['llama_cpp_dir'])
-        
-        # Configure CMake based on hardware
-        cmake_args = [
-            'cmake', '-B', 'build',
-            '-DBUILD_SHARED_LIBS=ON',  # Build shared libraries
-            '-DLLAMA_CURL=ON',
-            f'-DLLAMA_MAX_CONTEXT={self.config["context_size"]}'
-        ]
-        
-        if self.hardware.gpu_info['nvidia_available']:
-            cmake_args.extend(['-DGGML_CUDA=ON', '-DGGML_CUDA_FA_ALL_QUANTS=ON'])
-        else:
-            cmake_args.append('-DGGML_CUDA=OFF')
-        
-        subprocess.run(cmake_args, check=True)
-        
-        # Build with optimal parallelization
-        build_jobs = min(self.hardware.cpu_info['logical_cores'], 16)
-        subprocess.run([
-            'cmake', '--build', 'build', '--config', 'Release', 
-            f'-j{build_jobs}', '--clean-first',
-            '--target', 'llama-quantize', 'llama-cli', 'llama-gguf-split', 
-            'llama-mtmd-cli', 'llama-server'
-        ], check=True)
-        
-        # Copy binaries to llama.cpp directory
-        os.makedirs('..', exist_ok=True)  # Ensure parent directory exists
-        for binary in ['llama-quantize', 'llama-cli', 'llama-gguf-split', 
-                      'llama-mtmd-cli', 'llama-server']:
-            src = f'build/bin/{binary}'
-            dst = f'../{self.config["llama_cpp_dir"]}/{binary}'
-            if os.path.exists(src):
-                shutil.copy2(src, dst)
-                # Set execute permissions
-                try:
-                    os.chmod(dst, 0o755)  # rwxr-xr-x
-                except OSError:
-                    pass  # Ignore permission errors during build
-        
-        # Copy shared libraries
-        shared_libs = ['libllama.so', 'libggml.so', 'libggml-base.so', 'libggml-cpu.so']
-        for lib in shared_libs:
-            for lib_dir in ['build/lib', 'build/src', 'build']:
-                src = f'{lib_dir}/{lib}'
-                dst = f'../{self.config["llama_cpp_dir"]}/{lib}'
-                if os.path.exists(src):
-                    shutil.copy2(src, dst)
-                    self.print_status(f"Copied {lib} to llama.cpp directory")
-                    break
-        
-        os.chdir('..')
-        self.print_success("llama.cpp built successfully with optimized settings")
+        # Download again
+        if not self.download_precompiled_binaries():
+            self.print_error("Failed to re-download binaries with libraries")
+            sys.exit(1)
     
     def build_llama_cpp(self):
-        """Build llama.cpp with optimal settings or use precompiled binaries"""
+        """Download precompiled llama.cpp binaries"""
         if self.check_llama_cpp_binaries():
             self.print_success("llama.cpp binaries already available")
             # Fix permissions for existing binaries
             self._fix_binary_permissions()
-            # Check if shared libraries are available, if not, build from source
+            # Ensure shared libraries are available
             if not self._check_shared_libraries():
-                self.print_warning("Shared libraries missing, building from source...")
-                return self._build_from_source()
+                self.print_warning("Shared libraries missing, re-downloading...")
+                self._redownload_with_libraries()
             return
             
-        # Try precompiled binaries first
-        if self.download_precompiled_binaries():
-            # Check if shared libraries are available
-            if not self._check_shared_libraries():
-                self.print_warning("Shared libraries missing after download, building from source...")
-                return self._build_from_source()
-            return
+        # Download precompiled binaries
+        if not self.download_precompiled_binaries():
+            self.print_error("Failed to download precompiled binaries")
+            sys.exit(1)
         
-        # Build from source if precompiled binaries failed or missing libraries
-        self._build_from_source()
+        # Verify shared libraries are available
+        if not self._check_shared_libraries():
+            self.print_error("Shared libraries missing after download")
+            sys.exit(1)
     
     def get_available_quantizations(self) -> List[str]:
         """Get list of available quantizations in the repository"""
@@ -1202,7 +1151,6 @@ except Exception as e:
         print("  -s, --server        Run in server mode (default: interactive mode)")
         print("  -q, --quant TYPE    Quantization type (default: UD-Q2_K_XL)")
         print("  --skip-deps         Skip dependency installation")
-        print("  --skip-build        Skip llama.cpp build")
         print("  --skip-download     Skip model download")
         print("  --hardware-info     Show detailed hardware information")
         print("")
@@ -1334,7 +1282,6 @@ except Exception as e:
         parser.add_argument('-q', '--quant', type=str, default=self.optimal_settings['recommended_quant'],
                           help='Quantization type')
         parser.add_argument('--skip-deps', action='store_true', help='Skip dependency installation')
-        parser.add_argument('--skip-build', action='store_true', help='Skip llama.cpp build')
         parser.add_argument('--skip-download', action='store_true', help='Skip model download')
         parser.add_argument('--hardware-info', action='store_true', help='Show detailed hardware information')
         parser.add_argument('--no-parallel', action='store_true', help='Disable parallel model download')
@@ -1376,9 +1323,8 @@ except Exception as e:
         if not args.skip_deps:
             self.install_dependencies()
         
-        # Build llama.cpp while model downloads
-        if not args.skip_build:
-            self.build_llama_cpp()
+        # Download llama.cpp binaries
+        self.build_llama_cpp()
         
         # Download is already handled above
         
