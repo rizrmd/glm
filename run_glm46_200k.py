@@ -614,7 +614,7 @@ class GLMRunner:
         if not parallel:
             self.print_status(f"Downloading optimized GLM-4.6 model ({self.config['quant_type']} quantization)...")
         
-        # Create simplified download script
+        # Create simplified download script with progress
         download_script = f'''
 import os
 import sys
@@ -636,24 +636,36 @@ try:
     # Ensure local directory exists
     Path(local_dir).mkdir(parents=True, exist_ok=True)
     
-    # Use simple snapshot_download with allow_patterns
+    # Use simple snapshot_download with allow_patterns and progress
     patterns = [f"*{{quant_type}}*.gguf"]
     
     print(f"Downloading files matching patterns: {{patterns}}")
+    
+    # Progress callback
+    def progress_callback(progress):
+        if not {parallel}:
+            percent = progress * 100
+            print(f"\\r[DOWNLOAD] {{percent:.1f}}% - {{progress:.2f}}GB downloaded", end='', flush=True)
     
     snapshot_download(
         repo_id=repo_id,
         local_dir=local_dir,
         allow_patterns=patterns,
-        resume_download=True
+        resume_download=True,
+        tqdm_class=None  # Use built-in progress
     )
+    
+    if not {parallel}:
+        print()  # New line after progress
     
     # Verify files were downloaded
     downloaded_files = list(Path(local_dir).glob("*{{quant_type}}*.gguf"))
-    print(f"Downloaded {{len(downloaded_files)}} files:")
+    total_size_gb = sum(f.stat().st_size for f in downloaded_files) / (1024**3)
+    
+    print(f"Downloaded {{len(downloaded_files)}} files ({{total_size_gb:.1f}}GB total):")
     for f in downloaded_files:
-        size_mb = f.stat().st_size / (1024*1024)
-        print(f"  - {{f.name}} ({{size_mb:.1f}}MB)")
+        size_gb = f.stat().st_size / (1024**3)
+        print(f"  - {{f.name}} ({{size_gb:.1f}}GB)")
     
     if not {parallel}:
         print("Optimized model download completed successfully!")
@@ -921,11 +933,29 @@ except Exception as e:
         spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         idx = 0
         
+        # Monitor download progress by checking file sizes
+        model_dir = Path(self.config['model_dir'])
+        model_patterns = self.get_optimized_model_files()
+        last_size = 0
+        
         while download_thread.is_alive():
-            print(f"\r{Colors.YELLOW}[DOWNLOAD]{Colors.NC} {spinner[idx % len(spinner)]} Downloading model... ", end='', flush=True)
+            # Check current download size
+            current_size = 0
+            if model_dir.exists():
+                for pattern in model_patterns:
+                    for f in model_dir.glob(pattern):
+                        current_size += f.stat().st_size
+            
+            # Calculate progress if we have files
+            if current_size > 0:
+                size_gb = current_size / (1024**3)
+                print(f"\r{Colors.YELLOW}[DOWNLOAD]{Colors.NC} {spinner[idx % len(spinner)]} Downloading model... {size_gb:.2f}GB", end='', flush=True)
+            else:
+                print(f"\r{Colors.YELLOW}[DOWNLOAD]{Colors.NC} {spinner[idx % len(spinner)]} Downloading model... ", end='', flush=True)
+            
             idx += 1
-            time.sleep(0.1)
-            download_thread.join(timeout=0.1)
+            time.sleep(0.5)
+            download_thread.join(timeout=0.5)
         
         # Check if thread completed successfully
         if download_thread.is_alive():
@@ -935,8 +965,6 @@ except Exception as e:
         print(f"\r{Colors.GREEN}[SUCCESS]{Colors.NC} Model download completed!{' ' * 20}")
         
         # Verify files were actually downloaded
-        model_dir = Path(self.config['model_dir'])
-        model_patterns = self.get_optimized_model_files()
         existing_files = []
         for pattern in model_patterns:
             existing_files.extend(model_dir.glob(pattern))
