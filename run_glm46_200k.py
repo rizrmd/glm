@@ -1423,7 +1423,6 @@ except Exception as e:
                 
                 # High-end GPU optimizations for H200/H100
                 if self.hardware.gpu_info['gpu_memory'] >= 80000:
-                    cmd.extend(['--gpu-memory-split', '0'])
                     if 'f16' in buffer_types:
                         cmd.extend(['-ot', '.*=f16'])
                     # Add parallel processing optimizations
