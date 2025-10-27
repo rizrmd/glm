@@ -195,8 +195,8 @@ class HardwareDetector:
             # High-end GPU optimization (H100, H200, A100, etc.)
             if self.gpu_info['gpu_memory'] >= 80000:  # 80GB+ (H100/H200)
                 settings['cache_quantization'] = True
-                settings['batch_size'] = 1024  # Further optimized for H200 latency
-                settings['recommended_quant'] = 'UD-Q2_K_XL'  # Official recommended 2.7bit dynamic quant
+                settings['batch_size'] = 512  # Even smaller for better latency
+                settings['recommended_quant'] = 'UD-TQ1_0'  # Use current model for consistency
                 settings['use_tensor_cores'] = True
             elif self.gpu_info['gpu_memory'] >= 40000:  # 40GB+ (A100)
                 settings['cache_quantization'] = True
@@ -1323,10 +1323,10 @@ except Exception as e:
                     # Enable tensor parallelism if available
                     if self.hardware.gpu_info['gpu_count'] > 1:
                         cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
-                    # Official Unsloth recommended optimizations for GLM-4.6
+                    # H200 GPU optimizations - keep everything on GPU for speed
                     cmd.extend(['--main-gpu', '0'])  # Use primary GPU for main operations
-                    # Offload MoE layers to CPU for better performance (official recommendation)
-                    cmd.extend(['-ot', '.ffn_.*_exps.=CPU'])  # Offload all MoE layers to CPU
+                    # Keep all layers on GPU - MoE offloading to CPU is slower on H200
+                    cmd.extend(['-ot', '.*=f16'])  # Use f16 for all tensors for speed
                     # Advanced CUDA optimizations for H200
                     cmd.extend(['--mlock'])  # Lock memory to prevent swapping
         
@@ -1350,8 +1350,8 @@ except Exception as e:
             # Context size already set in base command
             # Enable low-memory mode for better performance
             if self.hardware.gpu_info['gpu_memory'] >= 80000:
-                cmd.extend(['--grp-attn-n', '1'])  # Grouped attention optimization
-                cmd.extend(['--rope-scaling', 'none'])  # Disable rope scaling for speed
+                # Remove potentially problematic flags that might slow things down
+                pass
         
         # Memory optimizations for large context
         if self.config['context_size'] >= 100000:
