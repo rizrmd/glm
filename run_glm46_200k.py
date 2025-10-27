@@ -1035,11 +1035,13 @@ try:
         
         # Debug: show what we're working with
         print(f"DEBUG: file_path = '{file_path}', filename = '{filename}'")
+        print(f"DEBUG: target_files contains: {target_files}")
         
         # Check if this is a direct file (no subdirectory)
         # Direct files will have format like "GLM-4.6-UD-TQ1_0.gguf"
         # Files in subdirectories will have quantization folder names
-        if filename.startswith("GLM-4.6-"):
+        # Check if file_path is just a filename (no subdirectory)
+        if '/' not in file_path or file_path == filename:
             # Direct file at repository root
             download_filename = filename
             print(f"Downloading direct file: {filename}")
