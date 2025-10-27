@@ -551,24 +551,29 @@ class GLMRunner:
         required_libs = ['libllama.so']
         llama_cpp_dir = self.config['llama_cpp_dir']
         
+        missing_libs = []
+        found_libs = []
+        
         for lib in required_libs:
             lib_path = os.path.join(llama_cpp_dir, lib)
-            if not os.path.exists(lib_path):
-                return False
-        return True
+            if os.path.exists(lib_path):
+                found_libs.append(lib)
+            else:
+                missing_libs.append(lib)
+        
+        if missing_libs:
+            self.print_status(f"Missing libraries: {', '.join(missing_libs)}")
+            self.print_status(f"Found libraries: {', '.join(found_libs)}")
+            return False
+        else:
+            self.print_status(f"All required libraries found: {', '.join(found_libs)}")
+            return True
     
 
     
     def _rebuild_from_source(self):
-        """Force rebuild from source to get missing shared libraries"""
-        # Remove existing binaries to force rebuild
-        llama_cpp_dir = Path(self.config['llama_cpp_dir'])
-        if llama_cpp_dir.exists():
-            for item in llama_cpp_dir.iterdir():
-                if item.name.startswith('llama-') or item.name.startswith('lib'):
-                    item.unlink()
-        
-        # Rebuild from source
+        """Rebuild from source to get missing shared libraries"""
+        # Never remove existing binaries - just rebuild
         self._build_from_source_linux()
     
     def build_llama_cpp(self):
@@ -584,10 +589,10 @@ class GLMRunner:
             self.print_success("llama.cpp binaries already available")
             # Fix permissions for existing binaries
             self._fix_binary_permissions()
-            # Ensure shared libraries are available
+            # Check shared libraries but don't force rebuild unless critical
             if not self._check_shared_libraries():
-                self.print_warning("Shared libraries missing, rebuilding from source...")
-                self._rebuild_from_source()
+                self.print_warning("Some shared libraries missing, but binaries may still work")
+                # Don't automatically rebuild - let the user decide if needed
             return
         
         # Build from source on Linux
@@ -595,11 +600,7 @@ class GLMRunner:
     
     def _build_from_source_linux(self):
         """Build llama.cpp from source on Linux with CUDA support"""
-        # Force rebuild by removing existing binaries
-        llama_cpp_dir = Path(self.config['llama_cpp_dir'])
-        if llama_cpp_dir.exists():
-            self.print_status("Removing existing llama.cpp directory for clean rebuild...")
-            shutil.rmtree(llama_cpp_dir)
+        # Never remove existing llama.cpp directory - preserve existing builds
         
         # Clone and build from source
         self.print_status("Building llama.cpp from source on Linux...")
@@ -708,10 +709,9 @@ class GLMRunner:
             self.print_success("llama.cpp binaries already available")
             # Fix permissions for existing binaries
             self._fix_binary_permissions()
-            # Ensure shared libraries are available
+            # Check shared libraries but don't force rebuild
             if not self._check_shared_libraries():
-                self.print_warning("Shared libraries missing, rebuilding from source...")
-                self._rebuild_from_source()
+                self.print_warning("Some shared libraries missing, but binaries may still work")
             return
         
         # Always build from source for optimal GPU support
