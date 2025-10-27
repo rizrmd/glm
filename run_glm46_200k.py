@@ -718,9 +718,12 @@ try:
         
         print(f"Downloading {{filename}}...")
         
+        # Extract just the filename from the full path
+        filename = file_path.split('/')[-1]
+        
         hf_hub_download(
             repo_id=repo_id,
-            filename=file_path,
+            filename=filename,
             local_dir=local_dir,
             resume_download=True
         )
