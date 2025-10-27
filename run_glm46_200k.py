@@ -670,8 +670,7 @@ try:
     snapshot_download(
         repo_id=repo_id,
         local_dir=local_dir,
-        allow_patterns=patterns,
-        resume_download=True
+        allow_patterns=patterns
     )
     
     # Stop progress monitoring
