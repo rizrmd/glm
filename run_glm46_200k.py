@@ -1325,8 +1325,9 @@ except Exception as e:
                         cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
                     # H200 GPU optimizations - keep everything on GPU for speed
                     cmd.extend(['--main-gpu', '0'])  # Use primary GPU for main operations
-                    # Keep all layers on GPU - MoE offloading to CPU is slower on H200
-                    cmd.extend(['-ot', '.*=f16'])  # Use f16 for all tensors for speed
+                    # KV cache quantization for better performance (reduces memory bandwidth)
+                    cmd.extend(['--cache-type-k', 'q4_1'])  # Quantize K cache to 4-bit with better accuracy
+                    cmd.extend(['--cache-type-v', 'q4_1'])  # Quantize V cache to 4-bit with better accuracy
                     # Advanced CUDA optimizations for H200
                     cmd.extend(['--mlock'])  # Lock memory to prevent swapping
         
