@@ -194,8 +194,8 @@ class HardwareDetector:
             
             # High-end GPU optimization (H100, H200, A100, etc.)
             if self.gpu_info['gpu_memory'] >= 80000:  # 80GB+ (H100/H200)
-                settings['cache_quantization'] = True
-                settings['batch_size'] = 512  # Even smaller for better latency
+                settings['cache_quantization'] = False  # Disable cache quantization to use full VRAM
+                settings['batch_size'] = 2048  # Larger batch size for better GPU utilization
                 settings['recommended_quant'] = 'UD-TQ1_0'  # Use current model for consistency
                 settings['use_tensor_cores'] = True
             elif self.gpu_info['gpu_memory'] >= 40000:  # 40GB+ (A100)
@@ -1322,11 +1322,11 @@ except Exception as e:
                     # Enable tensor parallelism if available
                     if self.hardware.gpu_info['gpu_count'] > 1:
                         cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
-                    # H200 GPU optimizations - keep everything on GPU for speed
+                    # H200 GPU optimizations - maximize VRAM usage for best performance
                     cmd.extend(['--main-gpu', '0'])  # Use primary GPU for main operations
-                    # KV cache quantization for better performance (reduces memory bandwidth)
-                    cmd.extend(['--cache-type-k', 'q4_1'])  # Quantize K cache to 4-bit with better accuracy
-                    cmd.extend(['--cache-type-v', 'q4_1'])  # Quantize V cache to 4-bit with better accuracy
+                    # Use full precision KV cache to maximize VRAM usage and performance
+                    cmd.extend(['--cache-type-k', 'f16'])  # Full precision K cache for best speed
+                    cmd.extend(['--cache-type-v', 'f16'])  # Full precision V cache for best speed
                     # Advanced CUDA optimizations for H200
                     cmd.extend(['--mlock'])  # Lock memory to prevent swapping
         
@@ -1352,16 +1352,10 @@ except Exception as e:
                 # Remove potentially problematic flags that might slow things down
                 pass
         
-        # Memory optimizations for large context
+        # Memory optimizations for large context - use full VRAM for best performance
         if self.config['context_size'] >= 100000:
-            # Note: --memory-f16 flag may not be available in all builds
-            # Only add if binary supports it
-            try:
-                result = subprocess.run([cmd[0], '--help'], capture_output=True, text=True, timeout=5)
-                if '--memory-f16' in result.stdout + result.stderr:
-                    cmd.extend(['--memory-f16'])  # Use half precision for KV cache if available
-            except:
-                pass
+            # Use full precision to maximize VRAM usage and performance
+            pass  # No memory optimization - use full VRAM
         
         # Performance optimization info
         if buffer_types:
