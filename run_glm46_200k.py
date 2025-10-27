@@ -569,6 +569,46 @@ class GLMRunner:
         os.chdir('..')
         self.print_success("llama.cpp built successfully with optimized settings")
     
+    def get_available_quantizations(self) -> List[str]:
+        """Get list of available quantizations in the repository"""
+        try:
+            from huggingface_hub import HfFileSystem
+            fs = HfFileSystem()
+            all_files = fs.glob(f"{self.config['model_repo']}/*")
+            gguf_files = [f for f in all_files if f.endswith('.gguf')]
+            
+            available_quants = set()
+            for f in gguf_files:
+                for quant in ["UD-TQ1_0", "UD-IQ1_S", "UD-IQ1_M", "UD-IQ2_XXS", "UD-Q2_K_XL", "UD-IQ3_XXS", "UD-Q3_K_XL", "UD-Q4_K_XL", "UD-Q5_K_XL"]:
+                    if quant in f:
+                        available_quants.add(quant)
+            
+            return sorted(list(available_quants))
+        except Exception:
+            return []
+    
+    def get_best_available_quantization(self) -> str:
+        """Get the best available quantization based on hardware and availability"""
+        available_quants = self.get_available_quantizations()
+        
+        if not available_quants:
+            self.print_error("No quantizations available in repository")
+            sys.exit(1)
+        
+        # Priority order based on quality
+        priority_order = [
+            "UD-Q5_K_XL", "UD-Q4_K_XL", "UD-Q3_K_XL", "UD-IQ3_XXS",
+            "UD-Q2_K_XL", "UD-IQ2_XXS", "UD-IQ1_M", "UD-IQ1_S", "UD-TQ1_0"
+        ]
+        
+        # Find the best available quantization
+        for quant in priority_order:
+            if quant in available_quants:
+                return quant
+        
+        # Fallback to first available
+        return available_quants[0]
+    
     def get_optimized_model_files(self) -> List[str]:
         """Get list of optimized model files for the current quantization"""
         # Map quantization types to their specific file patterns
@@ -594,10 +634,10 @@ class GLMRunner:
         if parallel:
             self.print_status(f"[PARALLEL] Checking for existing model files with patterns: {model_patterns}")
         
-        # Check if model files already exist
+        # Check if model files already exist (recursive search)
         existing_files = []
         for pattern in model_patterns:
-            files = list(model_dir.glob(pattern))
+            files = list(model_dir.rglob(pattern))  # Recursive search
             existing_files.extend(files)
             if parallel and files:
                 self.print_status(f"[PARALLEL] Found {len(files)} files matching {pattern}")
@@ -609,6 +649,10 @@ class GLMRunner:
                 self.print_status(f"[PARALLEL] Model files already exist ({size_gb:.1f}GB total) - skipping download")
             else:
                 self.print_success(f"Optimized model files already exist ({size_gb:.1f}GB total)")
+                # Show found files
+                for f in existing_files:
+                    size_gb = f.stat().st_size / (1024**3)
+                    self.print_status(f"  Found: {f.name} ({size_gb:.1f}GB)")
             return True
         
         if not parallel:
@@ -770,10 +814,10 @@ except Exception as e:
         model_dir = Path(self.config['model_dir'])
         model_patterns = self.get_optimized_model_files()
         
-        # Check for split files across all patterns
+        # Check for split files across all patterns (recursive search)
         split_files = []
         for pattern in model_patterns:
-            split_files.extend(model_dir.glob(f"{pattern.replace('*', '')}-00001-of-*.gguf"))
+            split_files.extend(model_dir.rglob(f"{pattern.replace('*', '')}-00001-of-*.gguf"))
         
         if split_files:
             self.print_status("Merging split GGUF files...")
@@ -788,10 +832,10 @@ except Exception as e:
             model_path = str(merged_file)
             self.print_success("Optimized model files merged successfully")
         else:
-            # Find the main optimized model file
+            # Find the main optimized model file (recursive search)
             model_files = []
             for pattern in model_patterns:
-                model_files.extend(model_dir.glob(pattern))
+                model_files.extend(model_dir.rglob(pattern))
             
             # Filter out split files
             model_files = [f for f in model_files if '-0000' not in f.name]
@@ -803,7 +847,7 @@ except Exception as e:
             else:
                 # Fallback to any matching file
                 for pattern in model_patterns:
-                    fallback_files = list(model_dir.glob(pattern))
+                    fallback_files = list(model_dir.rglob(pattern))
                     if fallback_files:
                         model_path = str(fallback_files[0])
                         break
@@ -814,6 +858,12 @@ except Exception as e:
                 self.print_success(f"Using optimized model file: {Path(model_path).name}")
             else:
                 self.print_error("No model files found!")
+                self.print_status("Debugging - checking directory structure:")
+                if model_dir.exists():
+                    for item in model_dir.rglob("*"):
+                        if item.is_file():
+                            size_gb = item.stat().st_size / (1024**3)
+                            self.print_status(f"  Found file: {item.relative_to(model_dir)} ({size_gb:.1f}GB)")
                 sys.exit(1)
         
         return model_path
