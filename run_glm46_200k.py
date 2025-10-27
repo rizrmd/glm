@@ -673,6 +673,8 @@ repo_id = "{self.config['model_repo']}"
 local_dir = "{self.config['model_dir']}"
 quant_type = "{self.config['quant_type']}"
 
+print(f"DEBUG: Using quantization: {{quant_type}}")
+
 print(f"Downloading optimized {{quant_type}} model files...")
 
 try:
