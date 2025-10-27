@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GLM-4.6 Runner with Full 200K Context
+GLM-4.6 Runner with Full 200K Context (Linux Only)
 Python version with automatic hardware detection and optimization
 """
 
@@ -354,41 +354,8 @@ class GLMRunner:
                 self.print_success("All system packages already installed")
         
         elif system == 'Darwin':
-            # Check if Homebrew is installed
-            if not self.check_command_exists('brew'):
-                self.print_status("Installing Homebrew...")
-                try:
-                    subprocess.run(['/bin/bash', '-c', 
-                                  '"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'], 
-                                 check=True)
-                    self.print_success("Homebrew installed successfully")
-                except subprocess.CalledProcessError as e:
-                    self.print_error(f"Failed to install Homebrew: {e}")
-                    sys.exit(1)
-            else:
-                self.print_status("✓ Homebrew already installed")
-            
-            # Check and install Homebrew packages
-            brew_packages = ['cmake', 'curl', 'libgit2']
-            packages_to_install = []
-            
-            for package in brew_packages:
-                if not self.check_brew_package_installed(package):
-                    packages_to_install.append(package)
-                else:
-                    self.print_status(f"✓ {package} already installed")
-            
-            if packages_to_install:
-                self.print_status(f"Installing missing Homebrew packages: {', '.join(packages_to_install)}")
-                try:
-                    subprocess.run(['brew', 'install'] + packages_to_install, check=True)
-                    self.print_success("Homebrew packages installed successfully")
-                except subprocess.CalledProcessError as e:
-                    self.print_error(f"Failed to install Homebrew packages: {e}")
-                    self.print_status("Please install manually: brew install " + " ".join(packages_to_install))
-                    sys.exit(1)
-            else:
-                self.print_success("All Homebrew packages already installed")
+            self.print_error("macOS is not supported. This script only supports Linux systems.")
+            sys.exit(1)
         
         # Install Python dependencies
         python_packages = ['huggingface_hub', 'hf_transfer']
@@ -452,23 +419,35 @@ class GLMRunner:
         except:
             version = 'b6853'  # Fallback version
         
-        # Map system/arch to release asset names (new naming convention)
+        # Default mapping for Linux only
         asset_map = {
             'Linux': {
                 'x86_64': f'llama-{version}-bin-ubuntu-x64.zip',
                 'aarch64': f'llama-{version}-bin-ubuntu-aarch64.zip'
-            },
-            'Darwin': {
-                'x86_64': f'llama-{version}-bin-macos-x64.zip',
-                'arm64': f'llama-{version}-bin-macos-arm64.zip'
             }
         }
         
-        if system not in asset_map or arch not in asset_map[system]:
-            self.print_warning(f"No precompiled binaries available for {system} {arch}")
+        # Only support Linux
+        if system != 'Linux':
+            self.print_error(f"Unsupported platform: {system}. Only Linux is supported.")
             return False
         
-        asset_name = asset_map[system][arch]
+        # Choose appropriate binary based on GPU availability
+        if arch == 'x86_64':
+            if self.hardware.gpu_info['nvidia_available']:
+                # Use Vulkan binary for NVIDIA GPU on Linux (no CUDA binary available)
+                asset_name = f'llama-{version}-bin-ubuntu-vulkan-x64.zip'
+                self.print_status("Using Vulkan binary for NVIDIA GPU support on Linux")
+            else:
+                # Use CPU binary for no GPU
+                asset_name = asset_map[system][arch]
+        else:
+            # Use default mapping for other architectures
+            if arch not in asset_map[system]:
+                self.print_warning(f"No precompiled binaries available for {system} {arch}")
+                return False
+            
+            asset_name = asset_map[system][arch]
         self.print_status(f"Downloading precompiled llama.cpp binaries for {system} {arch}...")
         
         try:
@@ -682,7 +661,112 @@ class GLMRunner:
             sys.exit(1)
     
     def build_llama_cpp(self):
-        """Download precompiled llama.cpp binaries"""
+        """Build llama.cpp from source on Linux only"""
+        system = self.hardware.system_info['platform']
+        
+        if system != 'Linux':
+            self.print_error("This script only supports Linux systems")
+            sys.exit(1)
+        
+        # Build from source on Linux
+        self._build_from_source_linux()
+    
+    def _build_from_source_linux(self):
+        """Build llama.cpp from source on Linux"""
+        # Force rebuild by removing existing binaries
+        llama_cpp_dir = Path(self.config['llama_cpp_dir'])
+        if llama_cpp_dir.exists():
+            self.print_status("Removing existing llama.cpp directory for clean rebuild...")
+            shutil.rmtree(llama_cpp_dir)
+        
+        # Clone and build from source
+        self.print_status("Building llama.cpp from source on Linux...")
+        
+        try:
+            # Clone the repository with shallow clone for speed
+            if not Path('llama.cpp').exists():
+                self.print_status("Cloning llama.cpp repository (shallow clone for speed)...")
+                subprocess.run(['git', 'clone', '--depth', '1', 'https://github.com/ggerganov/llama.cpp.git'], check=True)
+            else:
+                # Update existing repository
+                self.print_status("Updating existing llama.cpp repository...")
+                os.chdir('llama.cpp')
+                subprocess.run(['git', 'fetch', '--depth', '1'], check=True)
+                subprocess.run(['git', 'reset', '--hard', 'origin/main'], check=True)
+                os.chdir('..')
+            
+            # Build with appropriate flags for Linux
+            os.chdir('llama.cpp')
+            
+            # Optimized cmake configuration for faster builds
+            cmake_args = ['cmake', '-B', 'build', '-DCMAKE_BUILD_TYPE=Release', '-DLLAMA_NATIVE=ON']
+            
+            # Linux build with appropriate GPU support
+            if self.hardware.gpu_info['nvidia_available']:
+                self.print_status("Building optimized CUDA version for NVIDIA GPUs...")
+                cmake_args.extend(['-DLLAMA_CUDA=ON', '-DCMAKE_CUDA_ARCHITECTURES=native'])
+            elif self.hardware.gpu_info['amd_available']:
+                self.print_status("Building optimized ROCm version for AMD GPUs...")
+                cmake_args.extend(['-DLLAMA_HIPBLAS=ON'])
+            else:
+                self.print_status("Building optimized CPU-only version for Linux...")
+                cmake_args.extend(['-DLLAMA_BLAS=ON', '-DLLAMA_BLAS_VENDOR=OpenBLAS'])
+            
+            # Add parallel compilation flags
+            cmake_args.extend(['-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG', '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG'])
+            
+            # Configure build
+            subprocess.run(cmake_args, check=True)
+            
+            # Build with optimizations for speed
+            build_cmd = ['cmake', '--build', 'build', '--config', 'Release', '-j', str(self.hardware.cpu_info['logical_cores'])]
+            
+            # Add optimization flags for faster compilation
+            build_cmd.extend(['--', '-l', str(self.hardware.cpu_info['logical_cores'])])
+            
+            self.print_status(f"Building with {self.hardware.cpu_info['logical_cores']} parallel jobs...")
+            subprocess.run(build_cmd, check=True)
+            
+            # Copy binaries to expected location
+            os.chdir('..')
+            os.makedirs(self.config['llama_cpp_dir'], exist_ok=True)
+            
+            # Copy built binaries
+            binaries_to_copy = ['llama-cli', 'llama-server', 'llama-quantize', 'llama-gguf-split']
+            build_dir = Path('llama.cpp/build/bin')
+            
+            for binary in binaries_to_copy:
+                src_path = build_dir / binary
+                dst_path = Path(self.config['llama_cpp_dir']) / binary
+                
+                if src_path.exists():
+                    shutil.copy2(src_path, dst_path)
+                    os.chmod(dst_path, 0o755)
+                    self.print_status(f"Copied {binary} to {self.config['llama_cpp_dir']}/")
+                else:
+                    self.print_warning(f"Binary {binary} not found in build output")
+            
+            # Copy shared libraries if they exist
+            lib_build_dir = Path('llama.cpp/build/lib')
+            if lib_build_dir.exists():
+                for lib_file in lib_build_dir.glob('*.so*'):
+                    dst_path = Path(self.config['llama_cpp_dir']) / lib_file.name
+                    shutil.copy2(lib_file, dst_path)
+                    self.print_status(f"Copied library {lib_file.name}")
+            
+            self.print_success("llama.cpp built successfully from source on Linux")
+            
+        except subprocess.CalledProcessError as e:
+            self.print_error(f"Failed to build llama.cpp on Linux: {e}")
+            self.print_status("Falling back to precompiled binaries...")
+            self._download_precompiled_binaries_fallback()
+        
+        finally:
+            # Return to original directory
+            os.chdir('..') if os.getcwd().endswith('llama.cpp') else None
+    
+    def _download_precompiled_binaries_fallback(self):
+        """Download precompiled binaries for non-Linux platforms or fallback"""
         if self.check_llama_cpp_binaries():
             self.print_success("llama.cpp binaries already available")
             # Fix permissions for existing binaries
@@ -1129,15 +1213,22 @@ except Exception as e:
         if self.hardware.gpu_info['nvidia_available'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
             
-            # Only add tensor override if we have valid buffer types
-            if 'f32' in buffer_types:
-                cmd.extend(['-ot', '.ffn_.*_exps.=f32'])
-            
-            if self.optimal_settings['cache_quantization'] and 'q4_1' in buffer_types:
-                cmd.extend(['--cache-type-k', 'q4_1', '--cache-type-v', 'q4_1'])
-            
-            if self.optimal_settings['use_flash_attention']:
-                cmd.extend(['--flash-attn', 'on'])
+            # Check if we're using Vulkan (Linux) or CUDA (other platforms)
+            if self.hardware.system_info['platform'] == 'Linux':
+                # Vulkan binary - use conservative settings
+                self.print_status("Using Vulkan GPU backend (Linux)")
+                # Avoid advanced features that may not be supported in Vulkan
+            else:
+                # CUDA binary (Windows/macOS) - can use advanced features
+                # Only add tensor override if we have valid buffer types
+                if 'f32' in buffer_types:
+                    cmd.extend(['-ot', '.ffn_.*_exps.=f32'])
+                
+                if self.optimal_settings['cache_quantization'] and 'q4_1' in buffer_types:
+                    cmd.extend(['--cache-type-k', 'q4_1', '--cache-type-v', 'q4_1'])
+                
+                if self.optimal_settings['use_flash_attention']:
+                    cmd.extend(['--flash-attn', 'on'])
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
@@ -1197,7 +1288,6 @@ except Exception as e:
         self.print_status("Note: First load may take several minutes for 200K context initialization...")
         
         # Check if we're in an interactive terminal
-        import sys
         if not sys.stdin.isatty():
             self.print_warning("Not in interactive terminal. Starting server mode instead...")
             self.run_server(model_path)
@@ -1236,7 +1326,7 @@ except Exception as e:
     
     def show_usage(self):
         """Show usage information"""
-        print("Usage: python run_glm46_200k.py [OPTIONS]")
+        print("Usage: python run_glm46_200k.py [OPTIONS] (Linux Only)")
         print("")
         print("Options:")
         print("  -h, --help          Show this help message")
@@ -1268,6 +1358,8 @@ except Exception as e:
         print("  python run_glm46_200k.py                    # Run interactive mode")
         print("  python run_glm46_200k.py --server          # Run server mode")
         print("  python run_glm46_200k.py -q UD-Q4_K_XL     # Use 4.5bit quantization")
+        print("")
+        print("Note: This script only supports Linux systems with NVIDIA/AMD GPU support.")
     
     def show_hardware_info(self):
         """Show detailed hardware information"""
