@@ -493,15 +493,24 @@ class GLMRunner:
         model_dir = Path(self.config['model_dir'])
         model_patterns = self.get_optimized_model_files()
         
+        if parallel:
+            self.print_status(f"[PARALLEL] Checking for existing model files with patterns: {model_patterns}")
+        
         # Check if model files already exist
         existing_files = []
         for pattern in model_patterns:
-            existing_files.extend(model_dir.glob(pattern))
+            files = list(model_dir.glob(pattern))
+            existing_files.extend(files)
+            if parallel and files:
+                self.print_status(f"[PARALLEL] Found {len(files)} files matching {pattern}")
         
         if existing_files:
             total_size = sum(f.stat().st_size for f in existing_files)
             size_gb = total_size / (1024**3)
-            self.print_success(f"Optimized model files already exist ({size_gb:.1f}GB total)")
+            if parallel:
+                self.print_status(f"[PARALLEL] Model files already exist ({size_gb:.1f}GB total) - skipping download")
+            else:
+                self.print_success(f"Optimized model files already exist ({size_gb:.1f}GB total)")
             return True
         
         if not parallel:
@@ -868,11 +877,17 @@ except Exception as e:
         download_thread = None
         if not args.skip_download and not args.no_parallel:
             self.print_status("Starting parallel model download...")
+            self.print_status(f"Skip download: {args.skip_download}, No parallel: {args.no_parallel}")
             download_thread = self.download_model(parallel=True)
             if download_thread:
                 self.print_status("Parallel download thread started successfully")
             else:
-                self.print_warning("Failed to start parallel download thread")
+                self.print_warning("Parallel download not started (files may already exist)")
+        else:
+            if args.skip_download:
+                self.print_status("Download skipped by user request")
+            if args.no_parallel:
+                self.print_status("Parallel download disabled by user request")
         
         # Install dependencies while model downloads
         if not args.skip_deps:
