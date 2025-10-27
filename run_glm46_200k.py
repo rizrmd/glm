@@ -13,6 +13,10 @@ import platform
 import json
 import threading
 import time
+import requests
+import tempfile
+import zipfile
+import tarfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -408,22 +412,116 @@ class GLMRunner:
         
         self.print_success("Dependency check completed")
     
-    def check_llama_cpp_built(self) -> bool:
-        """Check if llama.cpp is already built"""
+    def check_llama_cpp_binaries(self) -> bool:
+        """Check if llama.cpp binaries are available (precompiled or built)"""
         required_binaries = ['llama-cli', 'llama-server']
+        
+        # Check for precompiled binaries in current directory
+        for binary in required_binaries:
+            if Path(binary).exists():
+                return True
+        
+        # Check for built binaries in llama.cpp directory
         for binary in required_binaries:
             binary_path = Path(self.config['llama_cpp_dir']) / binary
-            if not binary_path.exists():
+            if binary_path.exists():
+                return True
+        
+        # Check if binaries are in PATH
+        for binary in required_binaries:
+            if self.check_command_exists(binary):
+                return True
+        
+        return False
+    
+    def download_precompiled_binaries(self) -> bool:
+        """Download precompiled llama.cpp binaries if available"""
+        system = self.hardware.system_info['platform']
+        arch = self.hardware.system_info['architecture']
+        
+        # Map system/arch to release asset names
+        asset_map = {
+            'Linux': {
+                'x86_64': 'llama-bin-linux-x86_64',
+                'aarch64': 'llama-bin-linux-aarch64'
+            },
+            'Darwin': {
+                'x86_64': 'llama-bin-macos-x86_64',
+                'arm64': 'llama-bin-macos-arm64'
+            }
+        }
+        
+        if system not in asset_map or arch not in asset_map[system]:
+            self.print_warning(f"No precompiled binaries available for {system} {arch}")
+            return False
+        
+        asset_name = asset_map[system][arch]
+        self.print_status(f"Downloading precompiled llama.cpp binaries for {system} {arch}...")
+        
+        try:
+            # Download latest release
+            import requests
+            response = requests.get('https://api.github.com/repos/ggerganov/llama.cpp/releases/latest')
+            response.raise_for_status()
+            release_data = response.json()
+            
+            # Find the correct asset
+            asset_url = None
+            for asset in release_data['assets']:
+                if asset_name in asset['name']:
+                    asset_url = asset['browser_download_url']
+                    break
+            
+            if not asset_url:
+                self.print_warning(f"Could not find precompiled binary: {asset_name}")
                 return False
-        return True
+            
+            # Get asset name from URL
+            asset_name_from_url = asset_url.split('/')[-1]
+            
+            # Download and extract
+            import tempfile
+            import zipfile
+            import tarfile
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
+                self.print_status(f"Downloading {asset_name_from_url}...")
+                response = requests.get(asset_url, stream=True)
+                response.raise_for_status()
+                
+                for chunk in response.iter_content(chunk_size=8192):
+                    tmp_file.write(chunk)
+                
+                tmp_file.close()
+                
+                # Extract based on file type
+                if asset_url.endswith('.zip'):
+                    with zipfile.ZipFile(tmp_file.name, 'r') as zip_ref:
+                        zip_ref.extractall('.')
+                elif asset_url.endswith('.tar.gz') or asset_url.endswith('.tgz'):
+                    with tarfile.open(tmp_file.name, 'r:gz') as tar_ref:
+                        tar_ref.extractall('.')
+                
+                os.unlink(tmp_file.name)
+            
+            self.print_success("Precompiled binaries downloaded successfully")
+            return True
+            
+        except Exception as e:
+            self.print_warning(f"Failed to download precompiled binaries: {e}")
+            return False
     
     def build_llama_cpp(self):
-        """Build llama.cpp with optimal settings"""
-        if self.check_llama_cpp_built():
-            self.print_success("llama.cpp already built")
+        """Build llama.cpp with optimal settings or use precompiled binaries"""
+        if self.check_llama_cpp_binaries():
+            self.print_success("llama.cpp binaries already available")
             return
             
-        self.print_status("Building llama.cpp with optimized settings...")
+        # Try precompiled binaries first
+        if self.download_precompiled_binaries():
+            return
+        
+        self.print_status("Building llama.cpp from source (no precompiled binaries available)...")
         
         if not os.path.exists(self.config['llama_cpp_dir']):
             self.print_status("Cloning llama.cpp repository...")
