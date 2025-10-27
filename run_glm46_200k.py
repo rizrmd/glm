@@ -10,10 +10,30 @@ import subprocess
 import shutil
 import argparse
 import platform
-import psutil
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Auto-install required dependencies
+def auto_install_dependencies():
+    """Automatically install required Python dependencies"""
+    required_packages = ['psutil']
+    
+    for package in required_packages:
+        try:
+            __import__(package)
+        except ImportError:
+            print(f"{Colors.YELLOW}[INFO]{Colors.NC} Installing {package}...")
+            try:
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+                print(f"{Colors.GREEN}[SUCCESS]{Colors.NC} {package} installed successfully")
+            except subprocess.CalledProcessError as e:
+                print(f"{Colors.RED}[ERROR]{Colors.NC} Failed to install {package}: {e}")
+                sys.exit(1)
+
+# Install dependencies before importing psutil
+auto_install_dependencies()
+import psutil
 
 class Colors:
     RED = '\033[0;31m'
@@ -264,28 +284,48 @@ class GLMRunner:
         
         if system == 'Linux':
             try:
-                subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-                subprocess.run(['sudo', 'apt-get', 'install', '-y', 
-                              'pciutils', 'build-essential', 'cmake', 'curl', 
-                              'libcurl4-openssl-dev', 'git', 'python3-pip'], check=True)
+                # Check if running as root or with sudo
+                if os.geteuid() == 0:
+                    subprocess.run(['apt-get', 'update'], check=True)
+                    subprocess.run(['apt-get', 'install', '-y', 
+                                  'pciutils', 'build-essential', 'cmake', 'curl', 
+                                  'libcurl4-openssl-dev', 'git', 'python3-pip'], check=True)
+                else:
+                    self.print_warning("Not running as root. Attempting with sudo...")
+                    subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+                    subprocess.run(['sudo', 'apt-get', 'install', '-y', 
+                                  'pciutils', 'build-essential', 'cmake', 'curl', 
+                                  'libcurl4-openssl-dev', 'git', 'python3-pip'], check=True)
             except subprocess.CalledProcessError as e:
                 self.print_error(f"Failed to install dependencies: {e}")
+                self.print_status("Please install manually: apt-get install pciutils build-essential cmake curl libcurl4-openssl-dev git python3-pip")
                 sys.exit(1)
         
         elif system == 'Darwin':
             try:
+                # Check if Homebrew is installed
+                result = subprocess.run(['which', 'brew'], capture_output=True)
+                if result.returncode != 0:
+                    self.print_status("Installing Homebrew...")
+                    subprocess.run(['/bin/bash', '-c', 
+                                  '"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'], 
+                                 check=True)
+                
                 subprocess.run(['brew', 'install', 'cmake', 'curl', 'libgit2'], check=True)
             except subprocess.CalledProcessError as e:
                 self.print_error(f"Failed to install dependencies: {e}")
+                self.print_status("Please install manually: brew install cmake curl libgit2")
                 sys.exit(1)
         
         # Install Python dependencies
-        try:
-            subprocess.run([sys.executable, '-m', 'pip', 'install', '--user', 
-                          'huggingface_hub', 'hf_transfer'], check=True)
-        except subprocess.CalledProcessError as e:
-            self.print_error(f"Failed to install Python dependencies: {e}")
-            sys.exit(1)
+        python_packages = ['huggingface_hub', 'hf_transfer']
+        for package in python_packages:
+            try:
+                self.print_status(f"Installing {package}...")
+                subprocess.run([sys.executable, '-m', 'pip', 'install', '--user', package], check=True)
+            except subprocess.CalledProcessError as e:
+                self.print_error(f"Failed to install {package}: {e}")
+                sys.exit(1)
         
         self.print_success("Dependencies installed")
     
