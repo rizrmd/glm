@@ -195,7 +195,7 @@ class HardwareDetector:
             # High-end GPU optimization (H100, H200, A100, etc.)
             if self.gpu_info['gpu_memory'] >= 80000:  # 80GB+ (H100/H200)
                 settings['cache_quantization'] = True
-                settings['batch_size'] = 2048  # Optimized for better latency on H200
+                settings['batch_size'] = 1024  # Further optimized for H200 latency
                 settings['recommended_quant'] = 'UD-Q4_K_XL'  # Better performance/quality balance
                 settings['use_tensor_cores'] = True
             elif self.gpu_info['gpu_memory'] >= 40000:  # 40GB+ (A100)
@@ -1318,12 +1318,17 @@ except Exception as e:
                     # Add parallel processing optimizations
                     cmd.extend(['--parallel', str(self.hardware.cpu_info['logical_cores'])])
                     # Optimize batch size for H200 performance
-                    cmd.extend(['--batch-size', '2048'])  # Reduced from 4096 for better latency
+                    cmd.extend(['--batch-size', '1024'])  # Further reduced for better latency
                     # Add GPU-specific optimizations for H200
                     cmd.extend(['--gpu-layers', '999'])  # Ensure all layers on GPU
                     # Enable tensor parallelism if available
                     if self.hardware.gpu_info['gpu_count'] > 1:
                         cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
+                    # Additional H200 optimizations
+                    cmd.extend(['--main-gpu', '0'])  # Use primary GPU for main operations
+                    cmd.extend(['--no-mul-mat-q'])  # Disable quantized matmul for better performance
+                    if 'f32' in buffer_types:
+                        cmd.extend(['-ot', 'attn_output=f32'])  # Keep attention output in f32 for accuracy
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
@@ -1347,6 +1352,8 @@ except Exception as e:
             # Enable low-memory mode for better performance
             if self.hardware.gpu_info['gpu_memory'] >= 80000:
                 cmd.extend(['--grp-attn-n', '1'])  # Grouped attention optimization
+                cmd.extend(['--p-conv', '1'])  # Enable position convolution for better performance
+                cmd.extend(['--rope-scaling', 'none'])  # Disable rope scaling for speed
         
         # Memory optimizations for large context
         if self.config['context_size'] >= 100000:
