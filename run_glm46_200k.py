@@ -1030,21 +1030,11 @@ except Exception as e:
         if not self.check_requirements():
             sys.exit(1)
         
-        # Start parallel download if enabled and not skipped
-        download_thread = None
-        if not args.skip_download and not args.no_parallel:
-            self.print_status("Starting parallel model download...")
-            self.print_status(f"Skip download: {args.skip_download}, No parallel: {args.no_parallel}")
-            download_thread = self.download_model(parallel=True)
-            if download_thread:
-                self.print_status("Parallel download thread started successfully")
-            else:
-                self.print_warning("Parallel download not started (files may already exist)")
+        # Start download (using regular sequential download for better progress display)
+        if not args.skip_download:
+            self.download_model(parallel=False)
         else:
-            if args.skip_download:
-                self.print_status("Download skipped by user request")
-            if args.no_parallel:
-                self.print_status("Parallel download disabled by user request")
+            self.print_status("Download skipped by user request")
         
         # Install dependencies while model downloads
         if not args.skip_deps:
@@ -1054,13 +1044,7 @@ except Exception as e:
         if not args.skip_build:
             self.build_llama_cpp()
         
-        # Wait for download to complete if it was running in parallel
-        if download_thread:
-            if not self.wait_for_download(download_thread):
-                self.print_error("Parallel download failed, trying sequential download...")
-                self.download_model(parallel=False)
-        elif not args.skip_download:
-            self.download_model(parallel=False)
+        # Download is already handled above
         
         model_path = self.merge_model_files()
         
