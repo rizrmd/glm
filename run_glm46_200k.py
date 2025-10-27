@@ -11,6 +11,8 @@ import shutil
 import argparse
 import platform
 import json
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -456,7 +458,7 @@ class GLMRunner:
         os.chdir('..')
         self.print_success("llama.cpp built successfully with optimized settings")
     
-    def download_model(self):
+    def download_model(self, parallel=False):
         """Download GLM-4.6 model if not already present"""
         model_dir = Path(self.config['model_dir'])
         quant_pattern = f"*{self.config['quant_type']}*.gguf"
@@ -467,9 +469,10 @@ class GLMRunner:
             total_size = sum(f.stat().st_size for f in existing_files)
             size_gb = total_size / (1024**3)
             self.print_success(f"Model files already exist ({size_gb:.1f}GB total)")
-            return
+            return True
         
-        self.print_status(f"Downloading GLM-4.6 model ({self.config['quant_type']} quantization)...")
+        if not parallel:
+            self.print_status(f"Downloading GLM-4.6 model ({self.config['quant_type']} quantization)...")
         
         download_script = f'''
 import os
@@ -482,7 +485,10 @@ repo_id = "{self.config['model_repo']}"
 local_dir = "{self.config['model_dir']}"
 quant_type = "{self.config['quant_type']}"
 
-print(f"Downloading {{quant_type}} quantization...")
+if not {parallel}:
+    print(f"Downloading {{quant_type}} quantization...")
+else:
+    print("[PARALLEL] Starting model download in background...")
 
 try:
     snapshot_download(
@@ -491,19 +497,40 @@ try:
         allow_patterns=[f"*{{quant_type}}*"],
         resume_download=True
     )
-    print("Download completed successfully!")
+    if not {parallel}:
+        print("Download completed successfully!")
+    else:
+        print("[PARALLEL] Model download completed successfully!")
 except Exception as e:
-    print(f"Download failed: {{e}}")
+    if not {parallel}:
+        print(f"Download failed: {{e}}")
+    else:
+        print(f"[PARALLEL] Model download failed: {{e}}")
     sys.exit(1)
 '''
         
         with open('download_model.py', 'w') as f:
             f.write(download_script)
         
-        subprocess.run([sys.executable, 'download_model.py'], check=True)
-        os.remove('download_model.py')
-        
-        self.print_success("Model download completed")
+        if parallel:
+            # Run in background thread
+            def download_worker():
+                try:
+                    subprocess.run([sys.executable, 'download_model.py'], check=True)
+                except subprocess.CalledProcessError:
+                    pass
+                finally:
+                    if os.path.exists('download_model.py'):
+                        os.remove('download_model.py')
+            
+            thread = threading.Thread(target=download_worker, daemon=True)
+            thread.start()
+            return thread
+        else:
+            subprocess.run([sys.executable, 'download_model.py'], check=True)
+            os.remove('download_model.py')
+            self.print_success("Model download completed")
+            return True
     
     def merge_model_files(self) -> str:
         """Merge split GGUF files if necessary"""
@@ -694,6 +721,24 @@ except Exception as e:
         for key, value in self.optimal_settings.items():
             print(f"  {key}: {value}")
     
+    def wait_for_download(self, download_thread):
+        """Wait for parallel download to complete with progress indication"""
+        if download_thread is None:
+            return True
+            
+        self.print_status("Waiting for model download to complete...")
+        spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        idx = 0
+        
+        while download_thread.is_alive():
+            print(f"\r{Colors.YELLOW}[DOWNLOAD]{Colors.NC} {spinner[idx % len(spinner)]} Downloading model... ", end='', flush=True)
+            idx += 1
+            time.sleep(0.1)
+            download_thread.join(timeout=0.1)
+        
+        print(f"\r{Colors.GREEN}[SUCCESS]{Colors.NC} Model download completed!{' ' * 20}")
+        return True
+    
     def main(self):
         """Main execution function"""
         parser = argparse.ArgumentParser(description='GLM-4.6 Runner with 200K Context')
@@ -704,6 +749,7 @@ except Exception as e:
         parser.add_argument('--skip-build', action='store_true', help='Skip llama.cpp build')
         parser.add_argument('--skip-download', action='store_true', help='Skip model download')
         parser.add_argument('--hardware-info', action='store_true', help='Show detailed hardware information')
+        parser.add_argument('--no-parallel', action='store_true', help='Disable parallel model download')
         
         args = parser.parse_args()
         
@@ -723,14 +769,25 @@ except Exception as e:
         if not self.check_requirements():
             sys.exit(1)
         
+        # Start parallel download if enabled and not skipped
+        download_thread = None
+        if not args.skip_download and not args.no_parallel:
+            self.print_status("Starting parallel model download...")
+            download_thread = self.download_model(parallel=True)
+        
+        # Install dependencies while model downloads
         if not args.skip_deps:
             self.install_dependencies()
         
+        # Build llama.cpp while model downloads
         if not args.skip_build:
             self.build_llama_cpp()
         
-        if not args.skip_download:
-            self.download_model()
+        # Wait for download to complete if it was running in parallel
+        if download_thread:
+            self.wait_for_download(download_thread)
+        elif not args.skip_download:
+            self.download_model(parallel=False)
         
         model_path = self.merge_model_files()
         
