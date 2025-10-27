@@ -587,9 +587,11 @@ except Exception as e:
             # Run in background thread
             def download_worker():
                 try:
-                    subprocess.run([sys.executable, 'download_model.py'], check=True)
-                except subprocess.CalledProcessError:
-                    pass
+                    result = subprocess.run([sys.executable, 'download_model.py'], check=True, capture_output=True, text=True)
+                    if result.stdout:
+                        print(f"[PARALLEL] {result.stdout}")
+                except subprocess.CalledProcessError as e:
+                    print(f"[PARALLEL ERROR] {e}")
                 finally:
                     if os.path.exists('download_model.py'):
                         os.remove('download_model.py')
@@ -867,6 +869,10 @@ except Exception as e:
         if not args.skip_download and not args.no_parallel:
             self.print_status("Starting parallel model download...")
             download_thread = self.download_model(parallel=True)
+            if download_thread:
+                self.print_status("Parallel download thread started successfully")
+            else:
+                self.print_warning("Failed to start parallel download thread")
         
         # Install dependencies while model downloads
         if not args.skip_deps:
