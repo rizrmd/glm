@@ -938,7 +938,20 @@ except Exception as e:
         print(f"{Colors.YELLOW}{' '.join(cmd)}{Colors.NC}")
         self.print_status("Note: First load may take several minutes for 200K context initialization...")
         
-        subprocess.run(cmd)
+        # Check if we're in an interactive terminal
+        import sys
+        if not sys.stdin.isatty():
+            self.print_warning("Not in interactive terminal. Starting server mode instead...")
+            self.run_server(model_path)
+            return
+        
+        # Run interactive mode
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            self.print_status("\nExiting GLM-4.6...")
+        except Exception as e:
+            self.print_error(f"Error running model: {e}")
     
     def run_server(self, model_path: str):
         """Run GLM-4.6 in server mode"""
