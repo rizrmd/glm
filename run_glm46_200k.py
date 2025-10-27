@@ -837,29 +837,29 @@ except Exception as e:
             for pattern in model_patterns:
                 model_files.extend(model_dir.rglob(pattern))
             
-            # Filter out split files
-            model_files = [f for f in model_files if '-0000' not in f.name]
-            
-            if model_files:
-                # For split models, use the first split file (00001)
-                split_files = [f for f in model_files if '00001-of-' in f.name]
-                if split_files:
-                    model_path = str(split_files[0])
-                    self.print_status(f"Using split model file: {Path(model_path).name}")
-                else:
-                    # Choose the largest file (usually the main model)
-                    model_files.sort(key=lambda x: x.stat().st_size, reverse=True)
-                    model_path = str(model_files[0])
-                    self.print_status(f"Using largest model file: {Path(model_path).name}")
+            # First, look for split files and use the first one
+            split_files = [f for f in model_files if '00001-of-' in f.name]
+            if split_files:
+                model_path = str(split_files[0])
+                self.print_status(f"Using split model file: {Path(model_path).name}")
             else:
-                # Fallback to any matching file
-                for pattern in model_patterns:
-                    fallback_files = list(model_dir.rglob(pattern))
-                    if fallback_files:
-                        model_path = str(fallback_files[0])
-                        break
+                # Filter out split files to find single files
+                single_files = [f for f in model_files if '-0000' not in f.name]
+                
+                if single_files:
+                    # Choose the largest file (usually the main model)
+                    single_files.sort(key=lambda x: x.stat().st_size, reverse=True)
+                    model_path = str(single_files[0])
+                    self.print_status(f"Using largest model file: {Path(model_path).name}")
                 else:
-                    model_path = ""
+                    # Fallback to any matching file
+                    for pattern in model_patterns:
+                        fallback_files = list(model_dir.rglob(pattern))
+                        if fallback_files:
+                            model_path = str(fallback_files[0])
+                            break
+                    else:
+                        model_path = ""
             
             if model_path:
                 self.print_success(f"Using optimized model file: {Path(model_path).name}")
