@@ -14,6 +14,13 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+class Colors:
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    NC = '\033[0m'
+
 # Auto-install required dependencies
 def auto_install_dependencies():
     """Automatically install required Python dependencies if not already installed"""
@@ -35,13 +42,6 @@ def auto_install_dependencies():
 # Install dependencies before importing psutil
 auto_install_dependencies()
 import psutil
-
-class Colors:
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    NC = '\033[0m'
 
 class HardwareDetector:
     """Detect and analyze system hardware capabilities"""
