@@ -301,7 +301,9 @@ class GLMRunner:
         elif self.hardware.gpu_info['amd_available']:
             self.print_status(f"GPU: {self.hardware.gpu_info['gpu_count']} AMD GPU(s) detected")
         else:
-            self.print_warning("No GPU detected. Will run in CPU-only mode")
+            self.print_error("No GPU detected. This script requires NVIDIA or AMD GPU support.")
+            self.print_status("CPU-only mode is not supported.")
+            sys.exit(1)
         
         self.print_success("System requirements check completed")
         return True
@@ -739,8 +741,9 @@ class GLMRunner:
                 self.print_status("Building optimized ROCm version for AMD GPUs...")
                 cmake_args.extend(['-DGGML_HIPBLAS=ON'])
             else:
-                self.print_status("Building optimized CPU-only version for Linux...")
-                cmake_args.extend(['-DGGML_BLAS=ON', '-DGGML_BLAS_VENDOR=OpenBLAS'])
+                self.print_error("No supported GPU detected. This script requires NVIDIA or AMD GPU support.")
+                self.print_status("CPU-only builds are not supported.")
+                sys.exit(1)
             
             # Add parallel compilation flags
             cmake_args.extend(['-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG', '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG'])
@@ -819,16 +822,23 @@ class GLMRunner:
                 self._redownload_with_libraries()
             return
         
-        # For NVIDIA GPUs, always build from source - never download precompiled
+        # GPU support is required
+        if not self.hardware.gpu_info['nvidia_available'] and not self.hardware.gpu_info['amd_available']:
+            self.print_error("No supported GPU detected. This script requires NVIDIA or AMD GPU support.")
+            self.print_status("CPU-only builds are not supported.")
+            sys.exit(1)
+        
+        # For NVIDIA GPUs, always build from source for CUDA support
         if self.hardware.gpu_info['nvidia_available']:
             self.print_error("NVIDIA GPU detected but no CUDA binaries found - building from source")
             self._build_from_source_linux()
             return
-            
-        # Download precompiled binaries for non-NVIDIA systems
-        if not self.download_precompiled_binaries():
-            self.print_error("Failed to download precompiled binaries")
-            sys.exit(1)
+        
+        # For AMD GPUs, build from source for ROCm support
+        if self.hardware.gpu_info['amd_available']:
+            self.print_error("AMD GPU detected but no ROCm binaries found - building from source")
+            self._build_from_source_linux()
+            return
         
         # Verify shared libraries are available
         if not self._check_shared_libraries():
@@ -1114,8 +1124,7 @@ try:
         hf_hub_download(
             repo_id=repo_id,
             filename=download_filename,
-            local_dir=local_dir,
-            resume_download=True
+            local_dir=local_dir
         )
         
         downloaded_files.append(local_file_path)
