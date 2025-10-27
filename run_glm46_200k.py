@@ -614,12 +614,11 @@ class GLMRunner:
         if not parallel:
             self.print_status(f"Downloading optimized GLM-4.6 model ({self.config['quant_type']} quantization)...")
         
-        # Create download script with optimized file patterns
-        patterns_str = ', '.join([f'"{p}"' for p in model_patterns])
+        # Create simplified download script
         download_script = f'''
 import os
 import sys
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import snapshot_download
 from pathlib import Path
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
@@ -627,7 +626,6 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 repo_id = "{self.config['model_repo']}"
 local_dir = "{self.config['model_dir']}"
 quant_type = "{self.config['quant_type']}"
-patterns = [{patterns_str}]
 
 if not {parallel}:
     print(f"Downloading optimized {{quant_type}} model files...")
@@ -635,44 +633,27 @@ else:
     print("[PARALLEL] Starting optimized model download in background...")
 
 try:
-    # Try to download specific files first for more efficiency
-    downloaded_files = []
-    for pattern in patterns:
-        try:
-            # List files matching the pattern
-            from huggingface_hub import HfFileSystem
-            fs = HfFileSystem()
-            repo_files = fs.glob(f"{{repo_id}}/{{pattern}}")
-            
-            for file_path in repo_files:
-                if file_path.endswith('.gguf'):
-                    local_path = Path(local_dir) / Path(file_path).name
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    if not {parallel}:
-                        print(f"Downloading {{Path(file_path).name}}...")
-                    
-                    hf_hub_download(
-                        repo_id=repo_id,
-                        filename=file_path,
-                        local_dir=local_dir,
-                        resume_download=True
-                    )
-                    downloaded_files.append(file_path)
-        
-        except Exception as e:
-            # Fallback to snapshot_download if specific download fails
-            if not {parallel}:
-                print(f"Specific download failed, trying fallback: {{e}}")
-            else:
-                print(f"[PARALLEL] Specific download failed, trying fallback: {{e}}")
-            
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=local_dir,
-                allow_patterns=patterns,
-                resume_download=True
-            )
+    # Ensure local directory exists
+    Path(local_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Use simple snapshot_download with allow_patterns
+    patterns = [f"*{{quant_type}}*.gguf"]
+    
+    print(f"Downloading files matching patterns: {{patterns}}")
+    
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=local_dir,
+        allow_patterns=patterns,
+        resume_download=True
+    )
+    
+    # Verify files were downloaded
+    downloaded_files = list(Path(local_dir).glob("*{{quant_type}}*.gguf"))
+    print(f"Downloaded {{len(downloaded_files)}} files:")
+    for f in downloaded_files:
+        size_mb = f.stat().st_size / (1024*1024)
+        print(f"  - {{f.name}} ({{size_mb:.1f}}MB)")
     
     if not {parallel}:
         print("Optimized model download completed successfully!")
@@ -680,10 +661,9 @@ try:
         print("[PARALLEL] Optimized model download completed successfully!")
         
 except Exception as e:
-    if not {parallel}:
-        print(f"Download failed: {{e}}")
-    else:
-        print(f"[PARALLEL] Model download failed: {{e}}")
+    print(f"Download failed: {{e}}")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 '''
         
