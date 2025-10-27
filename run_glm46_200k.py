@@ -686,27 +686,45 @@ except Exception as e:
             # Run in background thread
             def download_worker():
                 try:
-                    result = subprocess.run([sys.executable, 'download_model.py'], check=True, capture_output=True, text=True)
+                    # Add debug output
+                    print(f"[PARALLEL DEBUG] Starting download script: {sys.executable} download_model.py")
+                    
+                    result = subprocess.run([sys.executable, 'download_model.py'], 
+                                         check=True, capture_output=True, text=True, 
+                                         cwd=os.getcwd())
+                    
+                    print(f"[PARALLEL DEBUG] Script completed with return code: {result.returncode}")
+                    
                     if result.stdout:
+                        print(f"[PARALLEL STDOUT]:")
                         for line in result.stdout.strip().split('\n'):
                             if line.strip():
-                                print(f"[PARALLEL] {line}")
+                                print(f"  {line}")
+                    
                     if result.stderr:
-                        print(f"[PARALLEL ERROR] {result.stderr}")
+                        print(f"[PARALLEL STDERR]:")
+                        for line in result.stderr.strip().split('\n'):
+                            if line.strip():
+                                print(f"  {line}")
+                                
                 except subprocess.CalledProcessError as e:
                     print(f"[PARALLEL ERROR] Download failed with exit code {e.returncode}")
                     if e.stdout:
-                        print(f"[PARALLEL STDOUT] {e.stdout}")
+                        print(f"[PARALLEL STDOUT]: {e.stdout}")
                     if e.stderr:
-                        print(f"[PARALLEL STDERR] {e.stderr}")
+                        print(f"[PARALLEL STDERR]: {e.stderr}")
                 except Exception as e:
                     print(f"[PARALLEL ERROR] Unexpected error: {e}")
+                    import traceback
+                    traceback.print_exc()
                 finally:
                     if os.path.exists('download_model.py'):
                         os.remove('download_model.py')
+                        print("[PARALLEL DEBUG] Cleaned up download_model.py")
             
             thread = threading.Thread(target=download_worker, daemon=True)
             thread.start()
+            print(f"[PARALLEL DEBUG] Thread started: {thread.name}")
             return thread
         else:
             subprocess.run([sys.executable, 'download_model.py'], check=True)
