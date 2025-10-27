@@ -826,6 +826,27 @@ class GLMRunner:
                     if quant in f:
                         available_quants.add(quant)
             
+            # Additional check: look for all files and directories more thoroughly
+            self.print_status("Debug: Scanning all repository contents...")
+            for f in all_files:
+                # Check if it's a directory path
+                if '/' in f and not f.endswith('.gguf'):
+                    # Extract directory name
+                    path_parts = f.split('/')
+                    if len(path_parts) >= 2:
+                        dir_name = path_parts[-2]  # Second to last part is directory name
+                        for quant in target_quants:
+                            if quant in dir_name:
+                                available_quants.add(quant)
+                                self.print_status(f"Found quantization directory: {dir_name}")
+                
+                # Check if it's a GGUF file
+                if f.endswith('.gguf'):
+                    for quant in target_quants:
+                        if quant in f:
+                            available_quants.add(quant)
+                            self.print_status(f"Found quantization file: {f.split('/')[-1]}")
+            
             if not available_quants:
                 # Debug: show some file names and directories
                 self.print_status("Debug: First few GGUF files found:")
@@ -951,15 +972,39 @@ try:
     from huggingface_hub import HfFileSystem
     fs = HfFileSystem()
     all_files = fs.glob(f"{{repo_id}}/*")
-    gguf_files = [f for f in all_files if f.endswith('.gguf')]
     
-    print(f"Found {{len(gguf_files)}} GGUF files in repository:")
+    # Look for both GGUF files and directories
+    gguf_files = [f for f in all_files if f.endswith('.gguf')]
+    directories = [f for f in all_files if f.endswith('/')]
+    
+    print(f"Found {{len(gguf_files)}} GGUF files and {{len(directories)}} directories in repository:")
+    
+    # Show GGUF files
     for f in gguf_files:
         if quant_type in f:
-            print(f"  - {{f.split('/')[-1]}}")
+            print(f"  - GGUF: {{f.split('/')[-1]}}")
     
-    # Filter files for our quantization
-    target_files = [f for f in gguf_files if quant_type in f]
+    # Show directories that might contain quantization files
+    for d in directories:
+        dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
+        if quant_type in dir_name:
+            print(f"  - Directory: {{dir_name}}")
+    
+    # Filter files for our quantization (both direct GGUF files and directories)
+    target_files = []
+    
+    # Add matching GGUF files
+    for f in gguf_files:
+        if quant_type in f:
+            target_files.append(f)
+    
+    # Add directories that match quantization
+    for d in directories:
+        dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
+        if quant_type in dir_name:
+            # Add all GGUF files in this directory
+            dir_files = fs.glob(f"{{repo_id}}/{{dir_name}}/*.gguf")
+            target_files.extend(dir_files)
     
     if not target_files:
         print(f"No files found matching quantization: {{quant_type}}")
@@ -979,17 +1024,35 @@ try:
     downloaded_files = []
     for file_path in target_files:
         # Extract just the filename from the full path
-        filename = file_path.split('/')[-1]
+        if '/' in file_path:
+            # It's a path within a directory
+            filename = file_path.split('/')[-1]
+            subdirectory = file_path.split('/')[-2] if len(file_path.split('/')) > 2 else None
+        else:
+            # It's a direct file
+            filename = file_path
+            subdirectory = None
+        
         local_file_path = Path(local_dir) / filename
         
         print(f"Downloading {{filename}}...")
         
-        hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            local_dir=local_dir,
-            resume_download=True
-        )
+        if subdirectory:
+            # Download from subdirectory
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=f"{{subdirectory}}/{{filename}}",
+                local_dir=local_dir,
+                resume_download=True
+            )
+        else:
+            # Download direct file
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=local_dir,
+                resume_download=True
+            )
         
         downloaded_files.append(local_file_path)
         
