@@ -841,9 +841,16 @@ except Exception as e:
             model_files = [f for f in model_files if '-0000' not in f.name]
             
             if model_files:
-                # Choose the largest file (usually the main model)
-                model_files.sort(key=lambda x: x.stat().st_size, reverse=True)
-                model_path = str(model_files[0])
+                # For split models, use the first split file (00001)
+                split_files = [f for f in model_files if '00001-of-' in f.name]
+                if split_files:
+                    model_path = str(split_files[0])
+                    self.print_status(f"Using split model file: {Path(model_path).name}")
+                else:
+                    # Choose the largest file (usually the main model)
+                    model_files.sort(key=lambda x: x.stat().st_size, reverse=True)
+                    model_path = str(model_files[0])
+                    self.print_status(f"Using largest model file: {Path(model_path).name}")
             else:
                 # Fallback to any matching file
                 for pattern in model_patterns:
