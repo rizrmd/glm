@@ -790,20 +790,67 @@ class GLMRunner:
     def get_available_quantizations(self) -> List[str]:
         """Get list of available quantizations in the repository"""
         try:
+            # First try to check if repository is accessible
+            from huggingface_hub import model_info
+            try:
+                info = model_info(self.config['model_repo'])
+                self.print_status(f"Repository accessible: {self.config['model_repo']}")
+                self.print_status(f"Model files: {len(info.siblings) if info.siblings else 0}")
+            except Exception as repo_error:
+                self.print_error(f"Repository not accessible: {repo_error}")
+                return self._get_fallback_quantizations()
+            
             from huggingface_hub import HfFileSystem
             fs = HfFileSystem()
             all_files = fs.glob(f"{self.config['model_repo']}/*")
             gguf_files = [f for f in all_files if f.endswith('.gguf')]
             
+            self.print_status(f"Found {len(gguf_files)} GGUF files in repository")
+            
+            # Based on Unsloth documentation, available quantizations are:
             available_quants = set()
+            target_quants = ["UD-TQ1_0", "UD-IQ1_S", "UD-IQ1_M", "UD-IQ2_XXS", "UD-Q2_K_XL", "UD-IQ3_XXS", "UD-Q3_K_XL", "UD-Q4_K_XL", "UD-Q5_K_XL"]
+            
+            # Check for directories containing quantization files
+            for f in all_files:
+                if f.endswith('/'):
+                    # It's a directory, check if it matches quantization pattern
+                    dir_name = f.split('/')[-2] if f.endswith('/') else f.split('/')[-1]
+                    for quant in target_quants:
+                        if quant in dir_name:
+                            available_quants.add(quant)
+            
+            # Also check individual GGUF files
             for f in gguf_files:
-                for quant in ["UD-TQ1_0", "UD-IQ1_S", "UD-IQ1_M", "UD-IQ2_XXS", "UD-Q2_K_XL", "UD-IQ3_XXS", "UD-Q3_K_XL", "UD-Q4_K_XL", "UD-Q5_K_XL"]:
+                for quant in target_quants:
                     if quant in f:
                         available_quants.add(quant)
             
+            if not available_quants:
+                # Debug: show some file names and directories
+                self.print_status("Debug: First few GGUF files found:")
+                for i, f in enumerate(gguf_files[:5]):
+                    self.print_status(f"  {f}")
+                
+                self.print_status("Debug: Directories found:")
+                dirs = [f for f in all_files if f.endswith('/')]
+                for i, d in enumerate(dirs[:10]):
+                    dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
+                    self.print_status(f"  {dir_name}")
+                
+                # Fallback to known available quantizations from documentation
+                self.print_status("Using fallback quantization list from documentation")
+                return self._get_fallback_quantizations()
+            
             return sorted(list(available_quants))
-        except Exception:
-            return []
+            
+        except Exception as e:
+            self.print_error(f"Failed to get quantizations: {e}")
+            return self._get_fallback_quantizations()
+    
+    def _get_fallback_quantizations(self) -> List[str]:
+        """Get fallback quantization list from documentation"""
+        return ["UD-TQ1_0", "UD-IQ1_S", "UD-IQ1_M", "UD-IQ2_XXS", "UD-Q2_K_XL", "UD-IQ3_XXS", "UD-Q3_K_XL", "UD-Q4_K_XL", "UD-Q5_K_XL"]
     
     def get_best_available_quantization(self) -> str:
         """Get the best available quantization based on hardware and availability"""
@@ -1479,7 +1526,15 @@ except Exception as e:
         
         # Check if requested quantization is available, fallback to best available
         available_quants = self.get_available_quantizations()
-        if args.quant not in available_quants:
+        if not available_quants:
+            self.print_error("No quantizations available in repository")
+            self.print_status("This could be due to:")
+            self.print_status("  1. Network connectivity issues")
+            self.print_status("  2. Repository not accessible")
+            self.print_status("  3. HuggingFace Hub API issues")
+            self.print_status("Trying fallback quantization...")
+            self.config['quant_type'] = 'UD-Q2_K_XL'  # Fallback to common quantization
+        elif args.quant not in available_quants:
             self.print_warning(f"Requested quantization {args.quant} not available")
             self.print_status(f"Available quantizations: {', '.join(available_quants)}")
             self.config['quant_type'] = self.get_best_available_quantization()
