@@ -559,7 +559,7 @@ class GLMRunner:
                         moved = True
                         break
             
-            # Set execute permissions if we moved the binary
+            # Set execute permissions if we moved binary
             if moved:
                 dst_path = os.path.join(self.config['llama_cpp_dir'], binary)
                 try:
@@ -567,6 +567,9 @@ class GLMRunner:
                     self.print_status(f"Set execute permissions for {binary}")
                 except OSError as e:
                     self.print_warning(f"Failed to set permissions for {binary}: {e}")
+        
+        # Also move shared libraries if they exist
+        self._move_shared_libraries()
     
     def _fix_binary_permissions(self):
         """Fix permissions for existing binaries in llama.cpp directory"""
@@ -583,19 +586,58 @@ class GLMRunner:
                 except OSError as e:
                     self.print_warning(f"Failed to fix permissions for {binary}: {e}")
     
-    def build_llama_cpp(self):
-        """Build llama.cpp with optimal settings or use precompiled binaries"""
-        if self.check_llama_cpp_binaries():
-            self.print_success("llama.cpp binaries already available")
-            # Fix permissions for existing binaries
-            self._fix_binary_permissions()
-            return
-            
-        # Try precompiled binaries first
-        if self.download_precompiled_binaries():
-            return
+    def _move_shared_libraries(self):
+        """Move shared libraries to llama.cpp directory"""
+        shared_libs = ['libllama.so', 'libggml.so', 'libggml-base.so', 'libggml-cpu.so', 'libggml-metal.so']
         
-        self.print_status("Building llama.cpp from source (no precompiled binaries available)...")
+        # Look for shared libraries in current directory and subdirectories
+        for lib in shared_libs:
+            lib_found = False
+            
+            # Check current directory
+            if os.path.exists(lib):
+                src = lib
+                dst = os.path.join(self.config['llama_cpp_dir'], lib)
+                shutil.move(src, dst)
+                self.print_status(f"Moved {lib} to {self.config['llama_cpp_dir']}/")
+                lib_found = True
+            
+            # Check common subdirectories
+            if not lib_found:
+                for subdir in ['lib', 'build/lib', 'build/src', '.']:
+                    lib_path = os.path.join(subdir, lib)
+                    if os.path.exists(lib_path):
+                        src = lib_path
+                        dst = os.path.join(self.config['llama_cpp_dir'], lib)
+                        shutil.move(src, dst)
+                        self.print_status(f"Moved {src} to {self.config['llama_cpp_dir']}/")
+                        lib_found = True
+                        break
+    
+    def _set_ld_library_path(self):
+        """Set LD_LIBRARY_PATH to include llama.cpp directory"""
+        llama_cpp_dir = os.path.abspath(self.config['llama_cpp_dir'])
+        current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
+        
+        if llama_cpp_dir not in current_ld_path:
+            new_ld_path = f"{llama_cpp_dir}:{current_ld_path}" if current_ld_path else llama_cpp_dir
+            os.environ['LD_LIBRARY_PATH'] = new_ld_path
+            self.print_status(f"Set LD_LIBRARY_PATH to include {llama_cpp_dir}")
+    
+    def _check_shared_libraries(self) -> bool:
+        """Check if required shared libraries are available"""
+        required_libs = ['libllama.so']
+        llama_cpp_dir = self.config['llama_cpp_dir']
+        
+        for lib in required_libs:
+            lib_path = os.path.join(llama_cpp_dir, lib)
+            if not os.path.exists(lib_path):
+                return False
+        return True
+    
+    def _build_from_source(self):
+        """Build llama.cpp from source (extracted from original build_llama_cpp method)"""
+        self.print_status("Building llama.cpp from source...")
         
         if not os.path.exists(self.config['llama_cpp_dir']):
             self.print_status("Cloning llama.cpp repository...")
@@ -611,7 +653,7 @@ class GLMRunner:
         # Configure CMake based on hardware
         cmake_args = [
             'cmake', '-B', 'build',
-            '-DBUILD_SHARED_LIBS=OFF',
+            '-DBUILD_SHARED_LIBS=ON',  # Build shared libraries
             '-DLLAMA_CURL=ON',
             f'-DLLAMA_MAX_CONTEXT={self.config["context_size"]}'
         ]
@@ -646,8 +688,42 @@ class GLMRunner:
                 except OSError:
                     pass  # Ignore permission errors during build
         
+        # Copy shared libraries
+        shared_libs = ['libllama.so', 'libggml.so', 'libggml-base.so', 'libggml-cpu.so']
+        for lib in shared_libs:
+            for lib_dir in ['build/lib', 'build/src', 'build']:
+                src = f'{lib_dir}/{lib}'
+                dst = f'../{self.config["llama_cpp_dir"]}/{lib}'
+                if os.path.exists(src):
+                    shutil.copy2(src, dst)
+                    self.print_status(f"Copied {lib} to llama.cpp directory")
+                    break
+        
         os.chdir('..')
         self.print_success("llama.cpp built successfully with optimized settings")
+    
+    def build_llama_cpp(self):
+        """Build llama.cpp with optimal settings or use precompiled binaries"""
+        if self.check_llama_cpp_binaries():
+            self.print_success("llama.cpp binaries already available")
+            # Fix permissions for existing binaries
+            self._fix_binary_permissions()
+            # Check if shared libraries are available, if not, build from source
+            if not self._check_shared_libraries():
+                self.print_warning("Shared libraries missing, building from source...")
+                return self._build_from_source()
+            return
+            
+        # Try precompiled binaries first
+        if self.download_precompiled_binaries():
+            # Check if shared libraries are available
+            if not self._check_shared_libraries():
+                self.print_warning("Shared libraries missing after download, building from source...")
+                return self._build_from_source()
+            return
+        
+        # Build from source if precompiled binaries failed or missing libraries
+        self._build_from_source()
     
     def get_available_quantizations(self) -> List[str]:
         """Get list of available quantizations in the repository"""
@@ -1070,6 +1146,9 @@ except Exception as e:
         
         os.environ['LLAMA_CACHE'] = self.config['model_dir']
         
+        # Set library path for shared libraries
+        self._set_ld_library_path()
+        
         cmd = self.build_command(model_path, server_mode=False)
         
         self.print_status("Running with command:")
@@ -1103,6 +1182,9 @@ except Exception as e:
         self.print_status("Starting GLM-4.6 server with 200K context...")
         
         os.environ['LLAMA_CACHE'] = self.config['model_dir']
+        
+        # Set library path for shared libraries
+        self._set_ld_library_path()
         
         cmd = self.build_command(model_path, server_mode=True)
         
