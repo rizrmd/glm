@@ -900,7 +900,6 @@ except Exception as e:
                 '--top-p', str(self.config['top_p']),
                 '--top-k', str(self.config['top_k']),
                 '--seed', str(self.config['seed']),
-                '--in-prefix', ' ',
                 '--color', '-i'
             ]
         
