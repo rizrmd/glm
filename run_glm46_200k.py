@@ -1137,12 +1137,12 @@ except Exception as e:
                 cmd.extend(['--cache-type-k', 'q4_1', '--cache-type-v', 'q4_1'])
             
             if self.optimal_settings['use_flash_attention']:
-                cmd.extend(['--flash-attn'])
+                cmd.extend(['--flash-attn', 'on'])
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
             if self.optimal_settings['use_flash_attention']:
-                cmd.append('--flash-attn')
+                cmd.extend(['--flash-attn', 'on'])
         
         else:
             # CPU-only optimization - no GPU-specific arguments
@@ -1162,8 +1162,12 @@ except Exception as e:
             i = 0
             while i < len(cmd):
                 arg = cmd[i]
-                # Skip tensor override and cache type arguments
-                if arg == '-ot' or arg.startswith('--cache-type-'):
+                # Skip GPU-specific arguments
+                if arg == '--n-gpu-layers' or arg == '--flash-attn':
+                    # Skip this argument and its value if it has one
+                    if i + 1 < len(cmd) and not cmd[i + 1].startswith('-'):
+                        i += 1
+                elif arg == '-ot' or arg.startswith('--cache-type-'):
                     # Skip this argument and its value if it has one
                     if i + 1 < len(cmd) and not cmd[i + 1].startswith('-'):
                         i += 1
