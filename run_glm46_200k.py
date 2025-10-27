@@ -1159,7 +1159,15 @@ except Exception as e:
             self.show_hardware_info()
             return
         
-        self.config['quant_type'] = args.quant
+        # Check if requested quantization is available, fallback to best available
+        available_quants = self.get_available_quantizations()
+        if args.quant not in available_quants:
+            self.print_warning(f"Requested quantization {args.quant} not available")
+            self.print_status(f"Available quantizations: {', '.join(available_quants)}")
+            self.config['quant_type'] = self.get_best_available_quantization()
+            self.print_status(f"Using best available quantization: {self.config['quant_type']}")
+        else:
+            self.config['quant_type'] = args.quant
         
         self.print_status("GLM-4.6 Runner with 200K Context")
         self.print_status(f"Quantization: {self.config['quant_type']}")
