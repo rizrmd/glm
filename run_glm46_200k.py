@@ -1066,6 +1066,16 @@ except Exception as e:
         # Default to llama.cpp directory path
         return f'./{self.config["llama_cpp_dir"]}/{binary_name}'
     
+    def check_gpu_support(self) -> bool:
+        """Check if the llama.cpp binary supports GPU"""
+        try:
+            cli_path = self.get_binary_path('llama-cli')
+            result = subprocess.run([cli_path, '--help'], capture_output=True, text=True, timeout=10)
+            help_text = result.stdout + result.stderr
+            return '--n-gpu-layers' in help_text
+        except:
+            return False
+    
     def build_command(self, model_path: str, server_mode: bool = False) -> List[str]:
         """Build optimized command based on hardware"""
         if server_mode:
@@ -1096,25 +1106,31 @@ except Exception as e:
                 '--color', '-i'
             ]
         
+        # Check if binary supports GPU
+        gpu_support = self.check_gpu_support()
+        
         # Add hardware-specific optimizations
-        if self.hardware.gpu_info['nvidia_available']:
+        if self.hardware.gpu_info['nvidia_available'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
-            cmd.extend(['-ot', '.ffn_.*_exps.=CPU'])
+            # Only add tensor override if we have GPU support
+            cmd.extend(['-ot', '.ffn_.*_exps.=f32'])
             
             if self.optimal_settings['cache_quantization']:
                 cmd.extend(['--cache-type-k', 'q4_1', '--cache-type-v', 'q4_1'])
             
             if self.optimal_settings['use_flash_attention']:
-                cmd.extend(['--flash-attn', 'on'])
+                cmd.extend(['--flash-attn'])
         
-        elif self.hardware.gpu_info['apple_silicon']:
+        elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
             if self.optimal_settings['use_flash_attention']:
                 cmd.append('--flash-attn')
         
         else:
-            # CPU-only optimization
+            # CPU-only optimization - no GPU-specific arguments
             cmd.extend(['--threads', str(self.optimal_settings['threads'])])
+            if not gpu_support and (self.hardware.gpu_info['nvidia_available'] or self.hardware.gpu_info['apple_silicon']):
+                self.print_warning("GPU detected but binary doesn't support GPU - running in CPU mode")
         
         return cmd
     
