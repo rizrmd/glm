@@ -419,18 +419,18 @@ class GLMRunner:
         """Check if llama.cpp binaries are available (precompiled or built)"""
         required_binaries = ['llama-cli', 'llama-server']
         
-        # Check for precompiled binaries in current directory
-        for binary in required_binaries:
-            if Path(binary).exists():
-                return True
-        
-        # Check for built binaries in llama.cpp directory
+        # Check for binaries in llama.cpp directory (primary location)
         for binary in required_binaries:
             binary_path = Path(self.config['llama_cpp_dir']) / binary
             if binary_path.exists():
                 return True
         
-        # Check if binaries are in PATH
+        # Check for precompiled binaries in current directory (fallback)
+        for binary in required_binaries:
+            if Path(binary).exists():
+                return True
+        
+        # Check if binaries are in PATH (fallback)
         for binary in required_binaries:
             if self.check_command_exists(binary):
                 return True
@@ -511,9 +511,13 @@ class GLMRunner:
                 if asset_url.endswith('.zip'):
                     with zipfile.ZipFile(tmp_file.name, 'r') as zip_ref:
                         zip_ref.extractall('.')
+                        # Move binaries to expected location if they're in a subdirectory
+                        self._move_binaries_to_llama_dir()
                 elif asset_url.endswith('.tar.gz') or asset_url.endswith('.tgz'):
                     with tarfile.open(tmp_file.name, 'r:gz') as tar_ref:
                         tar_ref.extractall('.')
+                        # Move binaries to expected location if they're in a subdirectory
+                        self._move_binaries_to_llama_dir()
                 
                 os.unlink(tmp_file.name)
             
@@ -523,6 +527,32 @@ class GLMRunner:
         except Exception as e:
             self.print_warning(f"Failed to download precompiled binaries: {e}")
             return False
+    
+    def _move_binaries_to_llama_dir(self):
+        """Move downloaded binaries to llama.cpp directory"""
+        # Create llama.cpp directory if it doesn't exist
+        os.makedirs(self.config['llama_cpp_dir'], exist_ok=True)
+        
+        # Look for binaries in current directory and subdirectories
+        binaries_to_move = ['llama-cli', 'llama-server', 'llama-quantize', 'llama-gguf-split', 'llama-mtmd-cli']
+        
+        for binary in binaries_to_move:
+            # Check if binary exists in current directory
+            if os.path.exists(binary):
+                src = binary
+                dst = os.path.join(self.config['llama_cpp_dir'], binary)
+                shutil.move(src, dst)
+                self.print_status(f"Moved {binary} to {self.config['llama_cpp_dir']}/")
+            
+            # Check if binary exists in common subdirectories
+            for subdir in ['bin', 'build/bin', '.']:
+                subdir_path = os.path.join(subdir, binary)
+                if os.path.exists(subdir_path):
+                    src = subdir_path
+                    dst = os.path.join(self.config['llama_cpp_dir'], binary)
+                    shutil.move(src, dst)
+                    self.print_status(f"Moved {src} to {self.config['llama_cpp_dir']}/")
+                    break
     
     def build_llama_cpp(self):
         """Build llama.cpp with optimal settings or use precompiled binaries"""
@@ -571,11 +601,12 @@ class GLMRunner:
             'llama-mtmd-cli', 'llama-server'
         ], check=True)
         
-        # Copy binaries
+        # Copy binaries to llama.cpp directory
+        os.makedirs('..', exist_ok=True)  # Ensure parent directory exists
         for binary in ['llama-quantize', 'llama-cli', 'llama-gguf-split', 
                       'llama-mtmd-cli', 'llama-server']:
             src = f'build/bin/{binary}'
-            dst = binary
+            dst = f'../{self.config["llama_cpp_dir"]}/{binary}'
             if os.path.exists(src):
                 shutil.copy2(src, dst)
         
@@ -874,8 +905,9 @@ except Exception as e:
             first_file = split_files[0]
             merged_file = model_dir / f"GLM-4.6-{self.config['quant_type']}-merged.gguf"
             
+            gguf_split_path = self.get_binary_path('llama-gguf-split')
             subprocess.run([
-                f'./{self.config["llama_cpp_dir"]}/llama-gguf-split',
+                gguf_split_path,
                 '--merge', str(first_file), str(merged_file)
             ], check=True)
             
@@ -925,11 +957,31 @@ except Exception as e:
         
         return model_path
     
+    def get_binary_path(self, binary_name: str) -> str:
+        """Get the correct path for a llama.cpp binary"""
+        # Check llama.cpp directory first
+        llama_cpp_path = Path(self.config['llama_cpp_dir']) / binary_name
+        if llama_cpp_path.exists():
+            return str(llama_cpp_path)
+        
+        # Check current directory
+        current_path = Path(binary_name)
+        if current_path.exists():
+            return binary_name
+        
+        # Check PATH
+        if self.check_command_exists(binary_name):
+            return binary_name
+        
+        # Default to llama.cpp directory path
+        return f'./{self.config["llama_cpp_dir"]}/{binary_name}'
+    
     def build_command(self, model_path: str, server_mode: bool = False) -> List[str]:
         """Build optimized command based on hardware"""
         if server_mode:
+            binary_path = self.get_binary_path('llama-server')
             cmd = [
-                f'./{self.config["llama_cpp_dir"]}/llama-server',
+                binary_path,
                 '--model', model_path,
                 '--alias', 'GLM-4.6-200K',
                 '--ctx-size', str(self.config['context_size']),
@@ -941,8 +993,9 @@ except Exception as e:
                 '--host', '0.0.0.0'
             ]
         else:
+            binary_path = self.get_binary_path('llama-cli')
             cmd = [
-                f'./{self.config["llama_cpp_dir"]}/llama-cli',
+                binary_path,
                 '--model', model_path,
                 '--jinja',
                 '--ctx-size', str(self.config['context_size']),
