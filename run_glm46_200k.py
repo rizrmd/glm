@@ -195,8 +195,8 @@ class HardwareDetector:
             # High-end GPU optimization (H100, H200, A100, etc.)
             if self.gpu_info['gpu_memory'] >= 80000:  # 80GB+ (H100/H200)
                 settings['cache_quantization'] = True
-                settings['batch_size'] = 4096
-                settings['recommended_quant'] = 'UD-Q5_K_XL'
+                settings['batch_size'] = 2048  # Optimized for better latency on H200
+                settings['recommended_quant'] = 'UD-Q4_K_XL'  # Better performance/quality balance
                 settings['use_tensor_cores'] = True
             elif self.gpu_info['gpu_memory'] >= 40000:  # 40GB+ (A100)
                 settings['cache_quantization'] = True
@@ -1317,8 +1317,13 @@ except Exception as e:
                         cmd.extend(['-ot', '.*=f16'])
                     # Add parallel processing optimizations
                     cmd.extend(['--parallel', str(self.hardware.cpu_info['logical_cores'])])
-                    # Increase batch size for better GPU utilization
-                    cmd.extend(['--batch-size', str(self.optimal_settings['batch_size'])])
+                    # Optimize batch size for H200 performance
+                    cmd.extend(['--batch-size', '2048'])  # Reduced from 4096 for better latency
+                    # Add GPU-specific optimizations for H200
+                    cmd.extend(['--gpu-layers', '999'])  # Ensure all layers on GPU
+                    # Enable tensor parallelism if available
+                    if self.hardware.gpu_info['gpu_count'] > 1:
+                        cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
@@ -1334,8 +1339,14 @@ except Exception as e:
         # Add universal performance optimizations
         if not server_mode:
             # Interactive mode optimizations
-            cmd.extend(['--batch-size', str(self.optimal_settings['batch_size'])])
+            if not (self.hardware.gpu_info['nvidia_available'] and self.hardware.gpu_info['gpu_memory'] >= 80000):
+                cmd.extend(['--batch-size', str(self.optimal_settings['batch_size'])])
             cmd.extend(['--keep', '0'])  # Don't keep prompt in context
+            # Additional performance optimizations
+            cmd.extend(['--ctx-size', str(self.config['context_size'])])
+            # Enable low-memory mode for better performance
+            if self.hardware.gpu_info['gpu_memory'] >= 80000:
+                cmd.extend(['--grp-attn-n', '1'])  # Grouped attention optimization
         
         # Memory optimizations for large context
         if self.config['context_size'] >= 100000:
