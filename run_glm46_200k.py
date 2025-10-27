@@ -282,8 +282,8 @@ class GLMRunner:
     def check_command_exists(self, command: str) -> bool:
         """Check if a command exists on the system"""
         try:
-            subprocess.run(['which', command], capture_output=True, check=True)
-            return True
+            result = subprocess.run(['which', command], capture_output=True, text=True)
+            return result.returncode == 0 and len(result.stdout.strip()) > 0
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
     
@@ -408,8 +408,21 @@ class GLMRunner:
         
         self.print_success("Dependency check completed")
     
+    def check_llama_cpp_built(self) -> bool:
+        """Check if llama.cpp is already built"""
+        required_binaries = ['llama-cli', 'llama-server']
+        for binary in required_binaries:
+            binary_path = Path(self.config['llama_cpp_dir']) / binary
+            if not binary_path.exists():
+                return False
+        return True
+    
     def build_llama_cpp(self):
         """Build llama.cpp with optimal settings"""
+        if self.check_llama_cpp_built():
+            self.print_success("llama.cpp already built")
+            return
+            
         self.print_status("Building llama.cpp with optimized settings...")
         
         if not os.path.exists(self.config['llama_cpp_dir']):
@@ -458,49 +471,107 @@ class GLMRunner:
         os.chdir('..')
         self.print_success("llama.cpp built successfully with optimized settings")
     
+    def get_optimized_model_files(self) -> List[str]:
+        """Get list of optimized model files for the current quantization"""
+        # Map quantization types to their specific file patterns
+        quant_file_map = {
+            'UD-TQ1_0': ['*UD-TQ1_0*.gguf'],
+            'UD-IQ1_S': ['*UD-IQ1_S*.gguf'],
+            'UD-IQ1_M': ['*UD-IQ1_M*.gguf'],
+            'UD-IQ2_XXS': ['*UD-IQ2_XXS*.gguf'],
+            'UD-Q2_K_XL': ['*UD-Q2_K_XL*.gguf'],
+            'UD-IQ3_XXS': ['*UD-IQ3_XXS*.gguf'],
+            'UD-Q3_K_XL': ['*UD-Q3_K_XL*.gguf'],
+            'UD-Q4_K_XL': ['*UD-Q4_K_XL*.gguf'],
+            'UD-Q5_K_XL': ['*UD-Q5_K_XL*.gguf']
+        }
+        
+        return quant_file_map.get(self.config['quant_type'], [f"*{self.config['quant_type']}*.gguf"])
+    
     def download_model(self, parallel=False):
-        """Download GLM-4.6 model if not already present"""
+        """Download only optimized GLM-4.6 model files if not already present"""
         model_dir = Path(self.config['model_dir'])
-        quant_pattern = f"*{self.config['quant_type']}*.gguf"
+        model_patterns = self.get_optimized_model_files()
         
         # Check if model files already exist
-        existing_files = list(model_dir.glob(quant_pattern))
+        existing_files = []
+        for pattern in model_patterns:
+            existing_files.extend(model_dir.glob(pattern))
+        
         if existing_files:
             total_size = sum(f.stat().st_size for f in existing_files)
             size_gb = total_size / (1024**3)
-            self.print_success(f"Model files already exist ({size_gb:.1f}GB total)")
+            self.print_success(f"Optimized model files already exist ({size_gb:.1f}GB total)")
             return True
         
         if not parallel:
-            self.print_status(f"Downloading GLM-4.6 model ({self.config['quant_type']} quantization)...")
+            self.print_status(f"Downloading optimized GLM-4.6 model ({self.config['quant_type']} quantization)...")
         
+        # Create download script with optimized file patterns
+        patterns_str = ', '.join([f'"{p}"' for p in model_patterns])
         download_script = f'''
 import os
 import sys
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download, snapshot_download
+from pathlib import Path
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
 repo_id = "{self.config['model_repo']}"
 local_dir = "{self.config['model_dir']}"
 quant_type = "{self.config['quant_type']}"
+patterns = [{patterns_str}]
 
 if not {parallel}:
-    print(f"Downloading {{quant_type}} quantization...")
+    print(f"Downloading optimized {{quant_type}} model files...")
 else:
-    print("[PARALLEL] Starting model download in background...")
+    print("[PARALLEL] Starting optimized model download in background...")
 
 try:
-    snapshot_download(
-        repo_id=repo_id,
-        local_dir=local_dir,
-        allow_patterns=[f"*{{quant_type}}*"],
-        resume_download=True
-    )
+    # Try to download specific files first for more efficiency
+    downloaded_files = []
+    for pattern in patterns:
+        try:
+            # List files matching the pattern
+            from huggingface_hub import HfFileSystem
+            fs = HfFileSystem()
+            repo_files = fs.glob(f"{{repo_id}}/{{pattern}}")
+            
+            for file_path in repo_files:
+                if file_path.endswith('.gguf'):
+                    local_path = Path(local_dir) / Path(file_path).name
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    if not {parallel}:
+                        print(f"Downloading {{Path(file_path).name}}...")
+                    
+                    hf_hub_download(
+                        repo_id=repo_id,
+                        filename=file_path,
+                        local_dir=local_dir,
+                        resume_download=True
+                    )
+                    downloaded_files.append(file_path)
+        
+        except Exception as e:
+            # Fallback to snapshot_download if specific download fails
+            if not {parallel}:
+                print(f"Specific download failed, trying fallback: {{e}}")
+            else:
+                print(f"[PARALLEL] Specific download failed, trying fallback: {{e}}")
+            
+            snapshot_download(
+                repo_id=repo_id,
+                local_dir=local_dir,
+                allow_patterns=patterns,
+                resume_download=True
+            )
+    
     if not {parallel}:
-        print("Download completed successfully!")
+        print("Optimized model download completed successfully!")
     else:
-        print("[PARALLEL] Model download completed successfully!")
+        print("[PARALLEL] Optimized model download completed successfully!")
+        
 except Exception as e:
     if not {parallel}:
         print(f"Download failed: {{e}}")
@@ -529,15 +600,20 @@ except Exception as e:
         else:
             subprocess.run([sys.executable, 'download_model.py'], check=True)
             os.remove('download_model.py')
-            self.print_success("Model download completed")
+            self.print_success("Optimized model download completed")
             return True
     
     def merge_model_files(self) -> str:
         """Merge split GGUF files if necessary"""
-        self.print_status("Checking if model files need merging...")
+        self.print_status("Checking if optimized model files need merging...")
         
         model_dir = Path(self.config['model_dir'])
-        split_files = list(model_dir.glob(f"*{self.config['quant_type']}*-00001-of-*.gguf"))
+        model_patterns = self.get_optimized_model_files()
+        
+        # Check for split files across all patterns
+        split_files = []
+        for pattern in model_patterns:
+            split_files.extend(model_dir.glob(f"{pattern.replace('*', '')}-00001-of-*.gguf"))
         
         if split_files:
             self.print_status("Merging split GGUF files...")
@@ -550,19 +626,35 @@ except Exception as e:
             ], check=True)
             
             model_path = str(merged_file)
-            self.print_success("Model files merged successfully")
+            self.print_success("Optimized model files merged successfully")
         else:
-            # Find the main model file
-            model_files = list(model_dir.glob(f"*{self.config['quant_type']}*.gguf"))
+            # Find the main optimized model file
+            model_files = []
+            for pattern in model_patterns:
+                model_files.extend(model_dir.glob(pattern))
+            
+            # Filter out split files
             model_files = [f for f in model_files if '-0000' not in f.name]
             
             if model_files:
+                # Choose the largest file (usually the main model)
+                model_files.sort(key=lambda x: x.stat().st_size, reverse=True)
                 model_path = str(model_files[0])
             else:
-                model_files = list(model_dir.glob(f"*{self.config['quant_type']}*.gguf"))
-                model_path = str(model_files[0]) if model_files else ""
+                # Fallback to any matching file
+                for pattern in model_patterns:
+                    fallback_files = list(model_dir.glob(pattern))
+                    if fallback_files:
+                        model_path = str(fallback_files[0])
+                        break
+                else:
+                    model_path = ""
             
-            self.print_success(f"Using single model file: {model_path}")
+            if model_path:
+                self.print_success(f"Using optimized model file: {Path(model_path).name}")
+            else:
+                self.print_error("No model files found!")
+                sys.exit(1)
         
         return model_path
     
@@ -750,6 +842,7 @@ except Exception as e:
         parser.add_argument('--skip-download', action='store_true', help='Skip model download')
         parser.add_argument('--hardware-info', action='store_true', help='Show detailed hardware information')
         parser.add_argument('--no-parallel', action='store_true', help='Disable parallel model download')
+        parser.add_argument('--debug', action='store_true', help='Enable debug mode to see what\'s being checked')
         
         args = parser.parse_args()
         
