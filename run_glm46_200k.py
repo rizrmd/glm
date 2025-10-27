@@ -1001,7 +1001,7 @@ try:
         if filename.startswith("GLM-4.6-") and quant_type in filename:
             target_files.append(filename)  # Store just the filename, not full path
             direct_file_found = True
-            print(f"Found direct file: {{filename}}")
+            print(f"Found direct file: {filename}")
     
     # If no direct file found, look in directories
     if not direct_file_found:
@@ -1009,12 +1009,12 @@ try:
             dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
             if quant_type in dir_name:
                 # Add all GGUF files in this directory
-                dir_files = fs.glob(f"{{repo_id}}/{{dir_name}}/*.gguf")
+                dir_files = fs.glob(f"{repo_id}/{dir_name}/*.gguf")
                 target_files.extend(dir_files)
-                print(f"Found directory with {{len(dir_files)}} files: {{dir_name}}")
+                print(f"Found directory with {len(dir_files)} files: {dir_name}")
     
     if not target_files:
-        print(f"No files found matching quantization: {{quant_type}}")
+        print(f"No files found matching quantization: {quant_type}")
         print("Available quantizations:")
         quants = set()
         for f in gguf_files:
@@ -1033,24 +1033,29 @@ try:
         # Extract just the filename from the full path
         filename = file_path.split('/')[-1]
         
+        # Debug: show what we're working with
+        print(f"DEBUG: file_path = '{file_path}', filename = '{filename}'")
+        
         # Check if this is a direct file (no subdirectory)
         # Direct files will have format like "GLM-4.6-UD-TQ1_0.gguf"
         # Files in subdirectories will have quantization folder names
         if filename.startswith("GLM-4.6-"):
             # Direct file at repository root
             download_filename = filename
-            print(f"Downloading direct file: {{filename}}")
+            print(f"Downloading direct file: {filename}")
         else:
             # File in subdirectory
             # Extract subdirectory path (everything before filename)
             path_parts = file_path.split('/')
             if len(path_parts) >= 2:
                 subdirectory = '/'.join(path_parts[:-1])  # Everything except filename
-                download_filename = f"{{subdirectory}}/{{filename}}"
-                print(f"Downloading from subdirectory: {{subdirectory}}/{{filename}}")
+                download_filename = f"{subdirectory}/{filename}"
+                print(f"Downloading from subdirectory: {subdirectory}/{filename}")
             else:
                 download_filename = filename
-                print(f"Downloading file: {{filename}}")
+                print(f"Downloading file: {filename}")
+        
+        print(f"DEBUG: download_filename = '{download_filename}'")
         
         local_file_path = Path(local_dir) / filename
         
