@@ -1076,6 +1076,21 @@ except Exception as e:
         except:
             return False
     
+    def get_available_buffer_types(self) -> list:
+        """Get available buffer types from the binary"""
+        try:
+            cli_path = self.get_binary_path('llama-cli')
+            result = subprocess.run([cli_path, '--help'], capture_output=True, text=True, timeout=10)
+            help_text = result.stdout + result.stderr
+            
+            # Look for buffer types in help output
+            if 'Available buffer types:' in help_text:
+                buffer_section = help_text.split('Available buffer types:')[1].split('\n')[0]
+                return [bt.strip() for bt in buffer_section.split() if bt.strip()]
+            return []
+        except:
+            return []
+    
     def build_command(self, model_path: str, server_mode: bool = False) -> List[str]:
         """Build optimized command based on hardware"""
         if server_mode:
@@ -1106,16 +1121,19 @@ except Exception as e:
                 '--color', '-i'
             ]
         
-        # Check if binary supports GPU
+        # Check if binary supports GPU and available buffer types
         gpu_support = self.check_gpu_support()
+        buffer_types = self.get_available_buffer_types()
         
         # Add hardware-specific optimizations
         if self.hardware.gpu_info['nvidia_available'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
-            # Only add tensor override if we have GPU support
-            cmd.extend(['-ot', '.ffn_.*_exps.=f32'])
             
-            if self.optimal_settings['cache_quantization']:
+            # Only add tensor override if we have valid buffer types
+            if 'f32' in buffer_types:
+                cmd.extend(['-ot', '.ffn_.*_exps.=f32'])
+            
+            if self.optimal_settings['cache_quantization'] and 'q4_1' in buffer_types:
                 cmd.extend(['--cache-type-k', 'q4_1', '--cache-type-v', 'q4_1'])
             
             if self.optimal_settings['use_flash_attention']:
@@ -1131,6 +1149,31 @@ except Exception as e:
             cmd.extend(['--threads', str(self.optimal_settings['threads'])])
             if not gpu_support and (self.hardware.gpu_info['nvidia_available'] or self.hardware.gpu_info['apple_silicon']):
                 self.print_warning("GPU detected but binary doesn't support GPU - running in CPU mode")
+        
+        # Debug info
+        if buffer_types:
+            self.print_status(f"Available buffer types: {', '.join(buffer_types)}")
+        else:
+            self.print_status("Buffer type information not available")
+        
+        # Filter out potentially problematic arguments for CPU-only builds
+        if not gpu_support:
+            filtered_cmd = []
+            i = 0
+            while i < len(cmd):
+                arg = cmd[i]
+                # Skip tensor override and cache type arguments
+                if arg == '-ot' or arg.startswith('--cache-type-'):
+                    # Skip this argument and its value if it has one
+                    if i + 1 < len(cmd) and not cmd[i + 1].startswith('-'):
+                        i += 1
+                elif arg.startswith('-ot='):
+                    # Skip combined form
+                    pass
+                else:
+                    filtered_cmd.append(arg)
+                i += 1
+            cmd = filtered_cmd
         
         return cmd
     
