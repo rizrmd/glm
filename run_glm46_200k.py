@@ -1315,8 +1315,7 @@ except Exception as e:
                 if self.hardware.gpu_info['gpu_memory'] >= 80000:
                     if 'f16' in buffer_types:
                         cmd.extend(['-ot', '.*=f16'])
-                    # Add parallel processing optimizations
-                    cmd.extend(['--parallel', str(self.hardware.cpu_info['logical_cores'])])
+                    # Remove CPU parallel processing - use GPU only
                     # Optimize batch size for H200 performance
                     cmd.extend(['--batch-size', '1024'])  # Further reduced for better latency
                     # GPU layers already set in base command
@@ -1337,10 +1336,9 @@ except Exception as e:
                 cmd.extend(['--flash-attn', 'on'])
         
         else:
-            # CPU-only optimization - no GPU-specific arguments
-            cmd.extend(['--threads', str(self.optimal_settings['threads'])])
-            if not gpu_support and (self.hardware.gpu_info['nvidia_available'] or self.hardware.gpu_info['apple_silicon']):
-                self.print_warning("GPU detected but binary doesn't support GPU - running in CPU mode")
+            # CPU mode is not supported - exit if no GPU
+            self.print_error("CPU-only mode is not supported. GPU is required.")
+            sys.exit(1)
         
         # Add universal performance optimizations
         if not server_mode:
@@ -1381,28 +1379,10 @@ except Exception as e:
         else:
             self.print_status(f"CPU optimizations: {self.optimal_settings['threads']} threads, batch_size={self.optimal_settings['batch_size']}")
         
-        # Filter out potentially problematic arguments for CPU-only builds
+        # CPU-only builds are not supported - require GPU
         if not gpu_support:
-            filtered_cmd = []
-            i = 0
-            while i < len(cmd):
-                arg = cmd[i]
-                # Skip GPU-specific arguments
-                if arg == '--n-gpu-layers' or arg == '--flash-attn':
-                    # Skip this argument and its value if it has one
-                    if i + 1 < len(cmd) and not cmd[i + 1].startswith('-'):
-                        i += 1
-                elif arg == '-ot' or arg.startswith('--cache-type-'):
-                    # Skip this argument and its value if it has one
-                    if i + 1 < len(cmd) and not cmd[i + 1].startswith('-'):
-                        i += 1
-                elif arg.startswith('-ot='):
-                    # Skip combined form
-                    pass
-                else:
-                    filtered_cmd.append(arg)
-                i += 1
-            cmd = filtered_cmd
+            self.print_error("GPU support is required. CPU-only mode is not supported.")
+            sys.exit(1)
         
         return cmd
     
