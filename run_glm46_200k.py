@@ -1328,7 +1328,7 @@ except Exception as e:
                     # Offload MoE layers to CPU for better performance (official recommendation)
                     cmd.extend(['-ot', '.ffn_.*_exps.=CPU'])  # Offload all MoE layers to CPU
                     # Advanced CUDA optimizations for H200
-                    cmd.extend(['--mlock', 'true'])  # Lock memory to prevent swapping
+                    cmd.extend(['--mlock'])  # Lock memory to prevent swapping
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
