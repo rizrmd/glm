@@ -947,7 +947,14 @@ except Exception as e:
         
         # Run interactive mode
         try:
-            subprocess.run(cmd)
+            self.print_status("GLM-4.6 is ready! Starting interactive mode...")
+            self.print_status("Press Ctrl+C to exit")
+            print("")
+            
+            # Run with proper input handling
+            process = subprocess.Popen(cmd, text=True)
+            process.wait()
+            
         except KeyboardInterrupt:
             self.print_status("\nExiting GLM-4.6...")
         except Exception as e:
