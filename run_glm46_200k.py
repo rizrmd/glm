@@ -993,18 +993,24 @@ try:
     # Filter files for our quantization (both direct GGUF files and directories)
     target_files = []
     
-    # Add matching GGUF files
+    # First check for direct GGUF file with exact quantization match
+    direct_file_found = False
     for f in gguf_files:
-        if quant_type in f:
+        filename = f.split('/')[-1]
+        if quant_type in filename and filename.startswith(f"GLM-4.6-{{quant_type}}"):
             target_files.append(f)
+            direct_file_found = True
+            print(f"Found direct file: {{filename}}")
     
-    # Add directories that match quantization
-    for d in directories:
-        dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
-        if quant_type in dir_name:
-            # Add all GGUF files in this directory
-            dir_files = fs.glob(f"{{repo_id}}/{{dir_name}}/*.gguf")
-            target_files.extend(dir_files)
+    # If no direct file found, look in directories
+    if not direct_file_found:
+        for d in directories:
+            dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
+            if quant_type in dir_name:
+                # Add all GGUF files in this directory
+                dir_files = fs.glob(f"{{repo_id}}/{{dir_name}}/*.gguf")
+                target_files.extend(dir_files)
+                print(f"Found directory with {{len(dir_files)}} files: {{dir_name}}")
     
     if not target_files:
         print(f"No files found matching quantization: {{quant_type}}")
@@ -1024,35 +1030,33 @@ try:
     downloaded_files = []
     for file_path in target_files:
         # Extract just the filename from the full path
-        if '/' in file_path:
-            # It's a path within a directory
-            filename = file_path.split('/')[-1]
-            subdirectory = file_path.split('/')[-2] if len(file_path.split('/')) > 2 else None
+        filename = file_path.split('/')[-1]
+        
+        # Check if this is a direct file (no subdirectory)
+        if file_path.count('/') == 0 or not any(dir in file_path for dir in ["UD-", "Q", "IQ"]):
+            # Direct file at repository root
+            download_filename = filename
+            print(f"Downloading direct file: {{filename}}")
         else:
-            # It's a direct file
-            filename = file_path
-            subdirectory = None
+            # File in subdirectory
+            # Extract subdirectory path (everything before the filename)
+            path_parts = file_path.split('/')
+            if len(path_parts) >= 2:
+                subdirectory = '/'.join(path_parts[:-1])  # Everything except filename
+                download_filename = f"{{subdirectory}}/{{filename}}"
+                print(f"Downloading from subdirectory: {{subdirectory}}/{{filename}}")
+            else:
+                download_filename = filename
+                print(f"Downloading file: {{filename}}")
         
         local_file_path = Path(local_dir) / filename
         
-        print(f"Downloading {{filename}}...")
-        
-        if subdirectory:
-            # Download from subdirectory
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=f"{{subdirectory}}/{{filename}}",
-                local_dir=local_dir,
-                resume_download=True
-            )
-        else:
-            # Download direct file
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                resume_download=True
-            )
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=download_filename,
+            local_dir=local_dir,
+            resume_download=True
+        )
         
         downloaded_files.append(local_file_path)
         
