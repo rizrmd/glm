@@ -529,7 +529,7 @@ class GLMRunner:
             return False
     
     def _move_binaries_to_llama_dir(self):
-        """Move downloaded binaries to llama.cpp directory"""
+        """Move downloaded binaries to llama.cpp directory and set permissions"""
         # Create llama.cpp directory if it doesn't exist
         os.makedirs(self.config['llama_cpp_dir'], exist_ok=True)
         
@@ -537,27 +537,58 @@ class GLMRunner:
         binaries_to_move = ['llama-cli', 'llama-server', 'llama-quantize', 'llama-gguf-split', 'llama-mtmd-cli']
         
         for binary in binaries_to_move:
+            moved = False
+            
             # Check if binary exists in current directory
             if os.path.exists(binary):
                 src = binary
                 dst = os.path.join(self.config['llama_cpp_dir'], binary)
                 shutil.move(src, dst)
                 self.print_status(f"Moved {binary} to {self.config['llama_cpp_dir']}/")
+                moved = True
             
             # Check if binary exists in common subdirectories
-            for subdir in ['bin', 'build/bin', '.']:
-                subdir_path = os.path.join(subdir, binary)
-                if os.path.exists(subdir_path):
-                    src = subdir_path
-                    dst = os.path.join(self.config['llama_cpp_dir'], binary)
-                    shutil.move(src, dst)
-                    self.print_status(f"Moved {src} to {self.config['llama_cpp_dir']}/")
-                    break
+            if not moved:
+                for subdir in ['bin', 'build/bin', '.']:
+                    subdir_path = os.path.join(subdir, binary)
+                    if os.path.exists(subdir_path):
+                        src = subdir_path
+                        dst = os.path.join(self.config['llama_cpp_dir'], binary)
+                        shutil.move(src, dst)
+                        self.print_status(f"Moved {src} to {self.config['llama_cpp_dir']}/")
+                        moved = True
+                        break
+            
+            # Set execute permissions if we moved the binary
+            if moved:
+                dst_path = os.path.join(self.config['llama_cpp_dir'], binary)
+                try:
+                    os.chmod(dst_path, 0o755)  # rwxr-xr-x
+                    self.print_status(f"Set execute permissions for {binary}")
+                except OSError as e:
+                    self.print_warning(f"Failed to set permissions for {binary}: {e}")
+    
+    def _fix_binary_permissions(self):
+        """Fix permissions for existing binaries in llama.cpp directory"""
+        binaries = ['llama-cli', 'llama-server', 'llama-quantize', 'llama-gguf-split', 'llama-mtmd-cli']
+        
+        for binary in binaries:
+            binary_path = os.path.join(self.config['llama_cpp_dir'], binary)
+            if os.path.exists(binary_path):
+                try:
+                    current_mode = os.stat(binary_path).st_mode
+                    if not (current_mode & 0o111):  # Check if execute bit is missing
+                        os.chmod(binary_path, 0o755)
+                        self.print_status(f"Fixed execute permissions for {binary}")
+                except OSError as e:
+                    self.print_warning(f"Failed to fix permissions for {binary}: {e}")
     
     def build_llama_cpp(self):
         """Build llama.cpp with optimal settings or use precompiled binaries"""
         if self.check_llama_cpp_binaries():
             self.print_success("llama.cpp binaries already available")
+            # Fix permissions for existing binaries
+            self._fix_binary_permissions()
             return
             
         # Try precompiled binaries first
@@ -609,6 +640,11 @@ class GLMRunner:
             dst = f'../{self.config["llama_cpp_dir"]}/{binary}'
             if os.path.exists(src):
                 shutil.copy2(src, dst)
+                # Set execute permissions
+                try:
+                    os.chmod(dst, 0o755)  # rwxr-xr-x
+                except OSError:
+                    pass  # Ignore permission errors during build
         
         os.chdir('..')
         self.print_success("llama.cpp built successfully with optimized settings")
@@ -1265,6 +1301,9 @@ except Exception as e:
         # Download is already handled above
         
         model_path = self.merge_model_files()
+        
+        # Ensure binary permissions are correct before running
+        self._fix_binary_permissions()
         
         if args.server:
             self.run_server(model_path)
