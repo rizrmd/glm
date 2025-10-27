@@ -1319,14 +1319,12 @@ except Exception as e:
                     cmd.extend(['--parallel', str(self.hardware.cpu_info['logical_cores'])])
                     # Optimize batch size for H200 performance
                     cmd.extend(['--batch-size', '1024'])  # Further reduced for better latency
-                    # Add GPU-specific optimizations for H200
-                    cmd.extend(['--gpu-layers', '999'])  # Ensure all layers on GPU
+                    # GPU layers already set in base command
                     # Enable tensor parallelism if available
                     if self.hardware.gpu_info['gpu_count'] > 1:
                         cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
                     # Additional H200 optimizations
                     cmd.extend(['--main-gpu', '0'])  # Use primary GPU for main operations
-                    cmd.extend(['--no-mul-mat-q'])  # Disable quantized matmul for better performance
                     if 'f32' in buffer_types:
                         cmd.extend(['-ot', 'attn_output=f32'])  # Keep attention output in f32 for accuracy
         
@@ -1347,8 +1345,7 @@ except Exception as e:
             if not (self.hardware.gpu_info['nvidia_available'] and self.hardware.gpu_info['gpu_memory'] >= 80000):
                 cmd.extend(['--batch-size', str(self.optimal_settings['batch_size'])])
             cmd.extend(['--keep', '0'])  # Don't keep prompt in context
-            # Additional performance optimizations
-            cmd.extend(['--ctx-size', str(self.config['context_size'])])
+            # Context size already set in base command
             # Enable low-memory mode for better performance
             if self.hardware.gpu_info['gpu_memory'] >= 80000:
                 cmd.extend(['--grp-attn-n', '1'])  # Grouped attention optimization
