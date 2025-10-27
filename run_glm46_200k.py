@@ -760,10 +760,21 @@ except Exception as e:
         # Set up environment for subprocess
         env = os.environ.copy()
         
+        # Use the same Python executable that's running this script
+        python_exe = sys.executable
+        
+        # Find the correct site-packages directory
+        import site
+        user_site = site.getusersitepackages()
+        
         # Add current directory and user site-packages to PYTHONPATH
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        user_site = os.path.expanduser('~/.local/lib/python*/site-packages')
         env['PYTHONPATH'] = f"{current_dir}:{user_site}:{env.get('PYTHONPATH', '')}"
+        
+        # Debug info
+        self.print_status(f"Using Python: {python_exe}")
+        self.print_status(f"User site-packages: {user_site}")
+        self.print_status(f"PYTHONPATH: {env['PYTHONPATH']}")
         
         if parallel:
             # Run in background thread
@@ -810,7 +821,22 @@ except Exception as e:
             print(f"[PARALLEL DEBUG] Thread started: {thread.name}")
             return thread
         else:
-            subprocess.run([sys.executable, 'download_model.py'], check=True, env=env)
+            # Use the same Python executable and import modules directly
+            python_exe = sys.executable
+            
+            # Debug info
+            self.print_status(f"Using Python: {python_exe}")
+            
+            # Try to import huggingface_hub in current process first
+            try:
+                import huggingface_hub
+                self.print_status("huggingface_hub is available in main process")
+            except ImportError as e:
+                self.print_error(f"huggingface_hub not available: {e}")
+                self.print_status("Installing huggingface_hub...")
+                subprocess.run([python_exe, '-m', 'pip', 'install', '--user', 'huggingface_hub'], check=True)
+            
+            subprocess.run([python_exe, 'download_model.py'], check=True, env=env)
             os.remove('download_model.py')
             self.print_success("Optimized model download completed")
             return True
