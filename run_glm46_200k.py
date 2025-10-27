@@ -196,7 +196,7 @@ class HardwareDetector:
             if self.gpu_info['gpu_memory'] >= 80000:  # 80GB+ (H100/H200)
                 settings['cache_quantization'] = True
                 settings['batch_size'] = 1024  # Further optimized for H200 latency
-                settings['recommended_quant'] = 'UD-Q4_K_XL'  # Better performance/quality balance
+                settings['recommended_quant'] = 'UD-Q2_K_XL'  # Official recommended 2.7bit dynamic quant
                 settings['use_tensor_cores'] = True
             elif self.gpu_info['gpu_memory'] >= 40000:  # 40GB+ (A100)
                 settings['cache_quantization'] = True
@@ -1323,10 +1323,12 @@ except Exception as e:
                     # Enable tensor parallelism if available
                     if self.hardware.gpu_info['gpu_count'] > 1:
                         cmd.extend(['--tensor-split', f"{self.hardware.gpu_info['gpu_memory']//2},{self.hardware.gpu_info['gpu_memory']//2}"])
-                    # Additional H200 optimizations
+                    # Official Unsloth recommended optimizations for GLM-4.6
                     cmd.extend(['--main-gpu', '0'])  # Use primary GPU for main operations
-                    if 'f32' in buffer_types:
-                        cmd.extend(['-ot', 'attn_output=f32'])  # Keep attention output in f32 for accuracy
+                    # Offload MoE layers to CPU for better performance (official recommendation)
+                    cmd.extend(['-ot', '.ffn_.*_exps.=CPU'])  # Offload all MoE layers to CPU
+                    # Advanced CUDA optimizations for H200
+                    cmd.extend(['--mlock', 'true'])  # Lock memory to prevent swapping
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
