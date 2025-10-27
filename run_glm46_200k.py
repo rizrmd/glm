@@ -16,16 +16,17 @@ from typing import Dict, List, Optional, Tuple
 
 # Auto-install required dependencies
 def auto_install_dependencies():
-    """Automatically install required Python dependencies"""
+    """Automatically install required Python dependencies if not already installed"""
     required_packages = ['psutil']
     
     for package in required_packages:
         try:
             __import__(package)
+            print(f"{Colors.GREEN}[OK]{Colors.NC} {package} already installed")
         except ImportError:
             print(f"{Colors.YELLOW}[INFO]{Colors.NC} Installing {package}...")
             try:
-                subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', package])
                 print(f"{Colors.GREEN}[SUCCESS]{Colors.NC} {package} installed successfully")
             except subprocess.CalledProcessError as e:
                 print(f"{Colors.RED}[ERROR]{Colors.NC} Failed to install {package}: {e}")
@@ -276,65 +277,147 @@ class GLMRunner:
         self.print_success("System requirements check completed")
         return True
     
+    def check_command_exists(self, command: str) -> bool:
+        """Check if a command exists on the system"""
+        try:
+            subprocess.run(['which', command], capture_output=True, check=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    
+    def check_deb_package_installed(self, package: str) -> bool:
+        """Check if a Debian package is installed"""
+        try:
+            result = subprocess.run(['dpkg', '-l', package], capture_output=True, text=True)
+            return result.returncode == 0 and 'ii' in result.stdout
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    
+    def check_brew_package_installed(self, package: str) -> bool:
+        """Check if a Homebrew package is installed"""
+        try:
+            result = subprocess.run(['brew', 'list', package], capture_output=True)
+            return result.returncode == 0
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    
+    def check_python_package_installed(self, package: str) -> bool:
+        """Check if a Python package is installed"""
+        try:
+            __import__(package)
+            return True
+        except ImportError:
+            return False
+    
     def install_dependencies(self):
-        """Install system dependencies"""
-        self.print_status("Installing dependencies...")
+        """Install system dependencies only if not already installed"""
+        self.print_status("Checking and installing dependencies...")
         
         system = self.hardware.system_info['platform']
         
         if system == 'Linux':
-            try:
-                # Check if running as root or with sudo
-                if os.geteuid() == 0:
-                    subprocess.run(['apt-get', 'update'], check=True)
-                    subprocess.run(['apt-get', 'install', '-y', 
-                                  'pciutils', 'build-essential', 'cmake', 'curl', 
-                                  'libcurl4-openssl-dev', 'git', 'python3-pip'], check=True)
+            packages = ['pciutils', 'build-essential', 'cmake', 'curl', 
+                       'libcurl4-openssl-dev', 'git', 'python3-pip']
+            packages_to_install = []
+            
+            for package in packages:
+                if not self.check_deb_package_installed(package):
+                    packages_to_install.append(package)
                 else:
-                    self.print_warning("Not running as root. Attempting with sudo...")
-                    subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-                    subprocess.run(['sudo', 'apt-get', 'install', '-y', 
-                                  'pciutils', 'build-essential', 'cmake', 'curl', 
-                                  'libcurl4-openssl-dev', 'git', 'python3-pip'], check=True)
-            except subprocess.CalledProcessError as e:
-                self.print_error(f"Failed to install dependencies: {e}")
-                self.print_status("Please install manually: apt-get install pciutils build-essential cmake curl libcurl4-openssl-dev git python3-pip")
-                sys.exit(1)
+                    self.print_status(f"✓ {package} already installed")
+            
+            if packages_to_install:
+                self.print_status(f"Installing missing packages: {', '.join(packages_to_install)}")
+                try:
+                    if os.geteuid() == 0:
+                        subprocess.run(['apt-get', 'update'], check=True)
+                        subprocess.run(['apt-get', 'install', '-y'] + packages_to_install, check=True)
+                    else:
+                        self.print_warning("Not running as root. Attempting with sudo...")
+                        subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+                        subprocess.run(['sudo', 'apt-get', 'install', '-y'] + packages_to_install, check=True)
+                    self.print_success("System packages installed successfully")
+                except subprocess.CalledProcessError as e:
+                    self.print_error(f"Failed to install dependencies: {e}")
+                    self.print_status("Please install manually: apt-get install " + " ".join(packages_to_install))
+                    sys.exit(1)
+            else:
+                self.print_success("All system packages already installed")
         
         elif system == 'Darwin':
-            try:
-                # Check if Homebrew is installed
-                result = subprocess.run(['which', 'brew'], capture_output=True)
-                if result.returncode != 0:
-                    self.print_status("Installing Homebrew...")
+            # Check if Homebrew is installed
+            if not self.check_command_exists('brew'):
+                self.print_status("Installing Homebrew...")
+                try:
                     subprocess.run(['/bin/bash', '-c', 
                                   '"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'], 
                                  check=True)
-                
-                subprocess.run(['brew', 'install', 'cmake', 'curl', 'libgit2'], check=True)
-            except subprocess.CalledProcessError as e:
-                self.print_error(f"Failed to install dependencies: {e}")
-                self.print_status("Please install manually: brew install cmake curl libgit2")
-                sys.exit(1)
+                    self.print_success("Homebrew installed successfully")
+                except subprocess.CalledProcessError as e:
+                    self.print_error(f"Failed to install Homebrew: {e}")
+                    sys.exit(1)
+            else:
+                self.print_status("✓ Homebrew already installed")
+            
+            # Check and install Homebrew packages
+            brew_packages = ['cmake', 'curl', 'libgit2']
+            packages_to_install = []
+            
+            for package in brew_packages:
+                if not self.check_brew_package_installed(package):
+                    packages_to_install.append(package)
+                else:
+                    self.print_status(f"✓ {package} already installed")
+            
+            if packages_to_install:
+                self.print_status(f"Installing missing Homebrew packages: {', '.join(packages_to_install)}")
+                try:
+                    subprocess.run(['brew', 'install'] + packages_to_install, check=True)
+                    self.print_success("Homebrew packages installed successfully")
+                except subprocess.CalledProcessError as e:
+                    self.print_error(f"Failed to install Homebrew packages: {e}")
+                    self.print_status("Please install manually: brew install " + " ".join(packages_to_install))
+                    sys.exit(1)
+            else:
+                self.print_success("All Homebrew packages already installed")
         
         # Install Python dependencies
         python_packages = ['huggingface_hub', 'hf_transfer']
-        for package in python_packages:
-            try:
-                self.print_status(f"Installing {package}...")
-                subprocess.run([sys.executable, '-m', 'pip', 'install', '--user', package], check=True)
-            except subprocess.CalledProcessError as e:
-                self.print_error(f"Failed to install {package}: {e}")
-                sys.exit(1)
+        packages_to_install = []
         
-        self.print_success("Dependencies installed")
+        for package in python_packages:
+            if not self.check_python_package_installed(package):
+                packages_to_install.append(package)
+            else:
+                self.print_status(f"✓ {package} already installed")
+        
+        if packages_to_install:
+            self.print_status(f"Installing missing Python packages: {', '.join(packages_to_install)}")
+            for package in packages_to_install:
+                try:
+                    subprocess.run([sys.executable, '-m', 'pip', 'install', '--user', '--quiet', package], check=True)
+                    self.print_status(f"✓ {package} installed successfully")
+                except subprocess.CalledProcessError as e:
+                    self.print_error(f"Failed to install {package}: {e}")
+                    sys.exit(1)
+            self.print_success("Python packages installed successfully")
+        else:
+            self.print_success("All Python packages already installed")
+        
+        self.print_success("Dependency check completed")
     
     def build_llama_cpp(self):
         """Build llama.cpp with optimal settings"""
         self.print_status("Building llama.cpp with optimized settings...")
         
         if not os.path.exists(self.config['llama_cpp_dir']):
+            self.print_status("Cloning llama.cpp repository...")
             subprocess.run(['git', 'clone', 'https://github.com/ggerganov/llama.cpp'], check=True)
+        else:
+            self.print_status("llama.cpp repository already exists, updating...")
+            os.chdir(self.config['llama_cpp_dir'])
+            subprocess.run(['git', 'pull'], check=True)
+            os.chdir('..')
         
         os.chdir(self.config['llama_cpp_dir'])
         
@@ -374,7 +457,18 @@ class GLMRunner:
         self.print_success("llama.cpp built successfully with optimized settings")
     
     def download_model(self):
-        """Download GLM-4.6 model"""
+        """Download GLM-4.6 model if not already present"""
+        model_dir = Path(self.config['model_dir'])
+        quant_pattern = f"*{self.config['quant_type']}*.gguf"
+        
+        # Check if model files already exist
+        existing_files = list(model_dir.glob(quant_pattern))
+        if existing_files:
+            total_size = sum(f.stat().st_size for f in existing_files)
+            size_gb = total_size / (1024**3)
+            self.print_success(f"Model files already exist ({size_gb:.1f}GB total)")
+            return
+        
         self.print_status(f"Downloading GLM-4.6 model ({self.config['quant_type']} quantization)...")
         
         download_script = f'''
