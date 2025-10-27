@@ -187,15 +187,29 @@ class HardwareDetector:
             'recommended_quant': 'UD-Q2_K_XL'
         }
         
-        # GPU optimization
+        # GPU optimization - enhanced for high-end GPUs
         if self.gpu_info['nvidia_available']:
             settings['gpu_layers'] = 999
             settings['use_flash_attention'] = True
-            if self.gpu_info['gpu_memory'] >= 8000:  # 8GB+
+            
+            # High-end GPU optimization (H100, H200, A100, etc.)
+            if self.gpu_info['gpu_memory'] >= 80000:  # 80GB+ (H100/H200)
+                settings['cache_quantization'] = True
+                settings['batch_size'] = 4096
+                settings['recommended_quant'] = 'UD-Q5_K_XL'
+                settings['use_tensor_cores'] = True
+            elif self.gpu_info['gpu_memory'] >= 40000:  # 40GB+ (A100)
+                settings['cache_quantization'] = True
+                settings['batch_size'] = 3072
+                settings['recommended_quant'] = 'UD-Q4_K_XL'
+                settings['use_tensor_cores'] = True
+            elif self.gpu_info['gpu_memory'] >= 16000:  # 16GB+
+                settings['cache_quantization'] = True
+                settings['batch_size'] = 2048
+                settings['recommended_quant'] = 'UD-Q4_K_XL'
+            elif self.gpu_info['gpu_memory'] >= 8000:  # 8GB+
                 settings['cache_quantization'] = True
                 settings['batch_size'] = 1024
-            if self.gpu_info['gpu_memory'] >= 16000:  # 16GB+
-                settings['recommended_quant'] = 'UD-Q4_K_XL'
         
         elif self.gpu_info['apple_silicon']:
             settings['gpu_layers'] = 999
@@ -204,17 +218,23 @@ class HardwareDetector:
             if self.memory_info['total_gb'] >= 16:
                 settings['recommended_quant'] = 'UD-Q4_K_XL'
         
-        # Memory optimization
-        if self.memory_info['total_gb'] >= 64:
-            settings['batch_size'] = 2048
+        # Memory optimization - more aggressive for high-memory systems
+        if self.memory_info['total_gb'] >= 256:
+            settings['batch_size'] = min(settings['batch_size'], 8192)
+        elif self.memory_info['total_gb'] >= 128:
+            settings['batch_size'] = min(settings['batch_size'], 6144)
+        elif self.memory_info['total_gb'] >= 64:
+            settings['batch_size'] = min(settings['batch_size'], 4096)
         elif self.memory_info['total_gb'] >= 32:
-            settings['batch_size'] = 1024
+            settings['batch_size'] = min(settings['batch_size'], 2048)
         elif self.memory_info['total_gb'] < 16:
             settings['recommended_quant'] = 'UD-TQ1_0'
             settings['context_size'] = min(100000, settings['context_size'])
         
         # CPU optimization
-        if self.cpu_info['physical_cores'] >= 16:
+        if self.cpu_info['physical_cores'] >= 32:
+            settings['threads'] = self.cpu_info['physical_cores'] - 4
+        elif self.cpu_info['physical_cores'] >= 16:
             settings['threads'] = self.cpu_info['physical_cores'] - 2
         elif self.cpu_info['physical_cores'] >= 8:
             settings['threads'] = self.cpu_info['physical_cores'] - 1
@@ -1366,6 +1386,16 @@ except Exception as e:
                 
                 if self.optimal_settings['use_flash_attention']:
                     cmd.extend(['--flash-attn', 'on'])
+                
+                # High-end GPU optimizations for H200/H100
+                if self.hardware.gpu_info['gpu_memory'] >= 80000:
+                    cmd.extend(['--gpu-memory-split', '0'])
+                    if 'f16' in buffer_types:
+                        cmd.extend(['-ot', '.*=f16'])
+                    # Add parallel processing optimizations
+                    cmd.extend(['--parallel', str(self.hardware.cpu_info['logical_cores'])])
+                    # Increase batch size for better GPU utilization
+                    cmd.extend(['--batch-size', str(self.optimal_settings['batch_size'])])
         
         elif self.hardware.gpu_info['apple_silicon'] and gpu_support:
             cmd.extend(['--n-gpu-layers', str(self.optimal_settings['gpu_layers'])])
@@ -1378,11 +1408,31 @@ except Exception as e:
             if not gpu_support and (self.hardware.gpu_info['nvidia_available'] or self.hardware.gpu_info['apple_silicon']):
                 self.print_warning("GPU detected but binary doesn't support GPU - running in CPU mode")
         
-        # Debug info
+        # Add universal performance optimizations
+        if not server_mode:
+            # Interactive mode optimizations
+            cmd.extend(['--batch-size', str(self.optimal_settings['batch_size'])])
+            cmd.extend(['--keep', '0'])  # Don't keep prompt in context
+        
+        # Memory optimizations for large context
+        if self.config['context_size'] >= 100000:
+            cmd.extend(['--memory-f16'])  # Use half precision for KV cache if available
+        
+        # Performance optimization info
         if buffer_types:
             self.print_status(f"Available buffer types: {', '.join(buffer_types)}")
         else:
             self.print_status("Buffer type information not available")
+        
+        # Show performance optimizations being applied
+        if self.hardware.gpu_info['nvidia_available'] and gpu_support:
+            self.print_status(f"GPU optimizations: {self.optimal_settings['gpu_layers']} layers, batch_size={self.optimal_settings['batch_size']}")
+            if self.hardware.gpu_info['gpu_memory'] >= 80000:
+                self.print_status("High-end GPU optimizations enabled (H200/H100 class)")
+            if self.optimal_settings.get('use_tensor_cores'):
+                self.print_status("Tensor cores optimization enabled")
+        else:
+            self.print_status(f"CPU optimizations: {self.optimal_settings['threads']} threads, batch_size={self.optimal_settings['batch_size']}")
         
         # Filter out potentially problematic arguments for CPU-only builds
         if not gpu_support:
