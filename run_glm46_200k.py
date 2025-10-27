@@ -757,6 +757,10 @@ except Exception as e:
         with open('download_model.py', 'w') as f:
             f.write(download_script)
         
+        # Set up environment for subprocess
+        env = os.environ.copy()
+        env['PYTHONPATH'] = os.path.dirname(os.path.abspath(__file__))
+        
         if parallel:
             # Run in background thread
             def download_worker():
@@ -766,7 +770,7 @@ except Exception as e:
                     
                     result = subprocess.run([sys.executable, 'download_model.py'], 
                                          check=True, capture_output=True, text=True, 
-                                         cwd=os.getcwd())
+                                         cwd=os.getcwd(), env=env)
                     
                     print(f"[PARALLEL DEBUG] Script completed with return code: {result.returncode}")
                     
@@ -802,7 +806,7 @@ except Exception as e:
             print(f"[PARALLEL DEBUG] Thread started: {thread.name}")
             return thread
         else:
-            subprocess.run([sys.executable, 'download_model.py'], check=True)
+            subprocess.run([sys.executable, 'download_model.py'], check=True, env=env)
             os.remove('download_model.py')
             self.print_success("Optimized model download completed")
             return True
