@@ -1349,7 +1349,6 @@ except Exception as e:
             # Enable low-memory mode for better performance
             if self.hardware.gpu_info['gpu_memory'] >= 80000:
                 cmd.extend(['--grp-attn-n', '1'])  # Grouped attention optimization
-                cmd.extend(['--p-conv', '1'])  # Enable position convolution for better performance
                 cmd.extend(['--rope-scaling', 'none'])  # Disable rope scaling for speed
         
         # Memory optimizations for large context
