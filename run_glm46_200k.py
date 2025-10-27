@@ -668,6 +668,17 @@ class GLMRunner:
             self.print_error("This script only supports Linux systems")
             sys.exit(1)
         
+        # Check if binaries already exist before building
+        if self.check_llama_cpp_binaries():
+            self.print_success("llama.cpp binaries already available")
+            # Fix permissions for existing binaries
+            self._fix_binary_permissions()
+            # Ensure shared libraries are available
+            if not self._check_shared_libraries():
+                self.print_warning("Shared libraries missing, re-downloading...")
+                self._redownload_with_libraries()
+            return
+        
         # Build from source on Linux
         self._build_from_source_linux()
     
@@ -992,29 +1003,29 @@ try:
     
     # Filter files for our quantization (both direct GGUF files and directories)
     target_files = []
+    is_direct_file = False
     
     # First check for direct GGUF file with exact quantization match
-    direct_file_found = False
     for f in gguf_files:
         filename = f.split('/')[-1]
         # Look for files that start with "GLM-4.6-" and contain the quantization
         if filename.startswith("GLM-4.6-") and quant_type in filename:
-            target_files.append(filename)  # Store just the filename, not full path
-            direct_file_found = True
-            print(f"Found direct file: {filename}")
+            target_files.append(f)  # Store the full path from fs.glob()
+            is_direct_file = True
+            print(f"Found direct file: {{filename}}")
     
     # If no direct file found, look in directories
-    if not direct_file_found:
+    if not is_direct_file:
         for d in directories:
             dir_name = d.split('/')[-2] if d.endswith('/') else d.split('/')[-1]
             if quant_type in dir_name:
                 # Add all GGUF files in this directory
-                dir_files = fs.glob(f"{repo_id}/{dir_name}/*.gguf")
+                dir_files = fs.glob(f"{{repo_id}}/{{dir_name}}/*.gguf")
                 target_files.extend(dir_files)
-                print(f"Found directory with {len(dir_files)} files: {dir_name}")
+                print(f"Found directory with {{len(dir_files)}} files: {{dir_name}}")
     
     if not target_files:
-        print(f"No files found matching quantization: {quant_type}")
+        print(f"No files found matching quantization: {{quant_type}}")
         print("Available quantizations:")
         quants = set()
         for f in gguf_files:
@@ -1034,30 +1045,32 @@ try:
         filename = file_path.split('/')[-1]
         
         # Debug: show what we're working with
-        print(f"DEBUG: file_path = '{file_path}', filename = '{filename}'")
-        print(f"DEBUG: target_files contains: {target_files}")
+        print(f"DEBUG: file_path = '{{file_path}}', filename = '{{filename}}'")
+        print(f"DEBUG: target_files contains: {{target_files}}")
         
         # Check if this is a direct file (no subdirectory)
-        # Direct files will have format like "GLM-4.6-UD-TQ1_0.gguf"
-        # Files in subdirectories will have quantization folder names
-        # Check if file_path is just a filename (no subdirectory)
-        if '/' not in file_path or file_path == filename:
+        # Direct files will have path like "unsloth/GLM-4.6-GGUF/GLM-4.6-UD-TQ1_0.gguf" 
+        # Files in subdirectories will have path like "unsloth/GLM-4.6-GGUF/UD-Q4_K_XL/somefile.gguf"
+        path_parts = file_path.split('/')
+        
+        # If we have exactly 3 parts and the middle part is the repo name, it's a direct file
+        # If we have 4+ parts, it's in a subdirectory
+        if len(path_parts) == 3 and path_parts[1] == repo_id.split('/')[-1]:
             # Direct file at repository root
             download_filename = filename
-            print(f"Downloading direct file: {filename}")
+            print(f"Downloading direct file: {{filename}}")
         else:
             # File in subdirectory
-            # Extract subdirectory path (everything before filename)
-            path_parts = file_path.split('/')
-            if len(path_parts) >= 2:
-                subdirectory = '/'.join(path_parts[:-1])  # Everything except filename
-                download_filename = f"{subdirectory}/{filename}"
-                print(f"Downloading from subdirectory: {subdirectory}/{filename}")
+            # Extract subdirectory path (everything after repo name, before filename)
+            if len(path_parts) >= 4:
+                subdirectory = '/'.join(path_parts[2:-1])  # Skip repo name, exclude filename
+                download_filename = f"{{subdirectory}}/{{filename}}"
+                print(f"Downloading from subdirectory: {{subdirectory}}/{{filename}}")
             else:
                 download_filename = filename
-                print(f"Downloading file: {filename}")
+                print(f"Downloading file: {{filename}}")
         
-        print(f"DEBUG: download_filename = '{download_filename}'")
+        print(f"DEBUG: download_filename = '{{download_filename}}'")
         
         local_file_path = Path(local_dir) / filename
         
