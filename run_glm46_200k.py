@@ -614,13 +614,13 @@ class GLMRunner:
         if not parallel:
             self.print_status(f"Downloading optimized GLM-4.6 model ({self.config['quant_type']} quantization)...")
         
-        # Create simplified download script with manual progress
+        # Create simplified download script with better debugging
         download_script = f'''
 import os
 import sys
 import time
 import threading
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, hf_hub_download
 from pathlib import Path
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
@@ -634,59 +634,72 @@ print(f"Downloading optimized {{quant_type}} model files...")
 try:
     # Ensure local directory exists
     Path(local_dir).mkdir(parents=True, exist_ok=True)
+    print(f"Download directory: {{Path(local_dir).absolute()}}")
     
-    # Use simple snapshot_download with allow_patterns
-    patterns = [f"*{{quant_type}}*.gguf"]
+    # First, list available files in the repo
+    from huggingface_hub import HfFileSystem
+    fs = HfFileSystem()
+    all_files = fs.glob(f"{{repo_id}}/*")
+    gguf_files = [f for f in all_files if f.endswith('.gguf')]
     
-    print(f"Downloading files matching patterns: {{patterns}}")
-    print("Starting download...")
+    print(f"Found {{len(gguf_files)}} GGUF files in repository:")
+    for f in gguf_files:
+        if quant_type in f:
+            print(f"  - {{f.split('/')[-1]}}")
     
-    # Start progress monitoring in background
-    stop_progress = False
+    # Filter files for our quantization
+    target_files = [f for f in gguf_files if quant_type in f]
     
-    def monitor_progress():
-        last_size = 0
-        while not stop_progress:
-            current_size = 0
-            file_count = 0
-            
-            if Path(local_dir).exists():
-                for pattern in patterns:
-                    for f in Path(local_dir).glob(pattern):
-                        if f.exists():
-                            current_size += f.stat().st_size
-                            file_count += 1
-            
-            if current_size > 0:
-                size_gb = current_size / (1024**3)
-                print(f"\\r[DOWNLOAD] {{file_count}} files, {{size_gb:.2f}}GB downloaded", end='', flush=True)
-            
-            time.sleep(2)
+    if not target_files:
+        print(f"No files found matching quantization: {{quant_type}}")
+        print("Available quantizations:")
+        quants = set()
+        for f in gguf_files:
+            for q in ["UD-TQ1_0", "UD-IQ1_S", "UD-IQ1_M", "UD-IQ2_XXS", "UD-Q2_K_XL", "UD-IQ3_XXS", "UD-Q3_K_XL", "UD-Q4_K_XL", "UD-Q5_K_XL"]:
+                if q in f:
+                    quants.add(q)
+        for q in sorted(quants):
+            print(f"  - {{q}}")
+        sys.exit(1)
     
-    progress_thread = threading.Thread(target=monitor_progress, daemon=True)
-    progress_thread.start()
+    print(f"Downloading {{len(target_files)}} files...")
     
-    # Download files
-    snapshot_download(
-        repo_id=repo_id,
-        local_dir=local_dir,
-        allow_patterns=patterns
-    )
+    # Download each file individually for better control
+    downloaded_files = []
+    for file_path in target_files:
+        filename = file_path.split('/')[-1]
+        local_file_path = Path(local_dir) / filename
+        
+        print(f"Downloading {{filename}}...")
+        
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=file_path,
+            local_dir=local_dir,
+            resume_download=True
+        )
+        
+        downloaded_files.append(local_file_path)
+        
+        # Show file size
+        if local_file_path.exists():
+            size_gb = local_file_path.stat().st_size / (1024**3)
+            print(f"  ✓ {{filename}} ({{size_gb:.1f}}GB)")
+        else:
+            print(f"  ✗ {{filename}} (FAILED)")
     
-    # Stop progress monitoring
-    stop_progress = True
-    time.sleep(2.5)  # Let progress thread finish
+    # Verify all files were downloaded
+    total_size_gb = sum(f.stat().st_size for f in downloaded_files if f.exists()) / (1024**3)
+    successful_files = [f for f in downloaded_files if f.exists()]
     
-    print()  # New line after progress
-    
-    # Verify files were downloaded
-    downloaded_files = list(Path(local_dir).glob("*{{quant_type}}*.gguf"))
-    total_size_gb = sum(f.stat().st_size for f in downloaded_files) / (1024**3)
-    
-    print(f"Download completed! {{len(downloaded_files)}} files ({{total_size_gb:.1f}}GB total):")
-    for f in downloaded_files:
+    print(f"\\nDownload completed! {{len(successful_files)}}/{{len(target_files)}} files ({{total_size_gb:.1f}}GB total):")
+    for f in successful_files:
         size_gb = f.stat().st_size / (1024**3)
         print(f"  - {{f.name}} ({{size_gb:.1f}}GB)")
+    
+    if len(successful_files) < len(target_files):
+        print(f"\\nWARNING: {{len(target_files) - len(successful_files)}} files failed to download")
+        sys.exit(1)
     
     print("Optimized model download completed successfully!")
         
