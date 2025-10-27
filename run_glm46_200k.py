@@ -696,9 +696,19 @@ except Exception as e:
                 try:
                     result = subprocess.run([sys.executable, 'download_model.py'], check=True, capture_output=True, text=True)
                     if result.stdout:
-                        print(f"[PARALLEL] {result.stdout}")
+                        for line in result.stdout.strip().split('\n'):
+                            if line.strip():
+                                print(f"[PARALLEL] {line}")
+                    if result.stderr:
+                        print(f"[PARALLEL ERROR] {result.stderr}")
                 except subprocess.CalledProcessError as e:
-                    print(f"[PARALLEL ERROR] {e}")
+                    print(f"[PARALLEL ERROR] Download failed with exit code {e.returncode}")
+                    if e.stdout:
+                        print(f"[PARALLEL STDOUT] {e.stdout}")
+                    if e.stderr:
+                        print(f"[PARALLEL STDERR] {e.stderr}")
+                except Exception as e:
+                    print(f"[PARALLEL ERROR] Unexpected error: {e}")
                 finally:
                     if os.path.exists('download_model.py'):
                         os.remove('download_model.py')
@@ -937,7 +947,30 @@ except Exception as e:
             time.sleep(0.1)
             download_thread.join(timeout=0.1)
         
+        # Check if thread completed successfully
+        if download_thread.is_alive():
+            self.print_error("Download thread is still running")
+            return False
+        
         print(f"\r{Colors.GREEN}[SUCCESS]{Colors.NC} Model download completed!{' ' * 20}")
+        
+        # Verify files were actually downloaded
+        model_dir = Path(self.config['model_dir'])
+        model_patterns = self.get_optimized_model_files()
+        existing_files = []
+        for pattern in model_patterns:
+            existing_files.extend(model_dir.glob(pattern))
+        
+        if not existing_files:
+            self.print_error("Download completed but no model files found!")
+            self.print_status("Checking download directory contents...")
+            if model_dir.exists():
+                for item in model_dir.iterdir():
+                    self.print_status(f"  Found: {item.name}")
+            else:
+                self.print_status("Model directory does not exist!")
+            return False
+        
         return True
     
     def main(self):
@@ -997,7 +1030,9 @@ except Exception as e:
         
         # Wait for download to complete if it was running in parallel
         if download_thread:
-            self.wait_for_download(download_thread)
+            if not self.wait_for_download(download_thread):
+                self.print_error("Parallel download failed, trying sequential download...")
+                self.download_model(parallel=False)
         elif not args.skip_download:
             self.download_model(parallel=False)
         
